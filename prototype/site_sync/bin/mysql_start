@@ -1,0 +1,31 @@
+#!/bin/bash
+# Start the prototype's private MySQL (port 3307, data under tmp/). Needs no
+# root: it runs as the current user and leaves the main MySQL alone.
+set -euo pipefail
+source "$(dirname "$0")/../env.sh" central >/dev/null
+
+DATA="$PROTO_TMP/data"
+mkdir -p "$PROTO_TMP"
+if [ ! -d "$DATA/mysql" ]; then
+  /usr/sbin/mysqld --no-defaults --initialize-insecure --datadir="$DATA" --user="$(whoami)" > "$PROTO_TMP/init.log" 2>&1
+fi
+if mysqladmin --no-defaults -uroot -h127.0.0.1 -P"$PROTO_MYSQL_PORT" ping >/dev/null 2>&1; then
+  echo "prototype MySQL already running on $PROTO_MYSQL_PORT"
+else
+nohup /usr/sbin/mysqld --no-defaults --datadir="$DATA" --port="$PROTO_MYSQL_PORT" --bind-address=127.0.0.1 \
+  --socket="$PROTO_TMP/mysqld.sock" --mysqlx=OFF --pid-file="$PROTO_TMP/mysqld.pid" \
+  --log-error="$PROTO_TMP/error.log" --log-bin=binlog --binlog-expire-logs-seconds=86400 --server-id=1 --sync-binlog=1 \
+  --innodb-flush-log-at-trx-commit=1 --log-bin-trust-function-creators=1 \
+  --innodb-buffer-pool-size=256M --sql-mode=STRICT_TRANS_TABLES > /dev/null 2>&1 &
+for _ in $(seq 1 30); do
+  mysqladmin --no-defaults -uroot -h127.0.0.1 -P"$PROTO_MYSQL_PORT" ping >/dev/null 2>&1 && break
+  sleep 1
+done
+fi
+# The app connects as "proto" (database.yml supplies a password, so the
+# passwordless root cannot be used through DATABASE_URL).
+proto_mysql -e "CREATE USER IF NOT EXISTS 'proto'@'localhost' IDENTIFIED BY 'proto';
+                CREATE USER IF NOT EXISTS 'proto'@'127.0.0.1' IDENTIFIED BY 'proto';
+                GRANT ALL PRIVILEGES ON *.* TO 'proto'@'localhost' WITH GRANT OPTION;
+                GRANT ALL PRIVILEGES ON *.* TO 'proto'@'127.0.0.1' WITH GRANT OPTION;"
+echo "prototype MySQL ready on $PROTO_MYSQL_PORT"

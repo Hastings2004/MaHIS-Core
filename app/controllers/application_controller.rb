@@ -5,9 +5,11 @@ require 'user_service'
 
 class ApplicationController < ActionController::API
   around_action :clear_request_context
+  before_action :refuse_while_sync_restoring
   # before_action :check_location
   before_action :authenticate
   before_action :set_audited_user
+  around_action :tag_sync_request
   # before_action :check_client_version
   after_action  :refresh_dashboard, if: :refresh_dashboard_needed?
   after_action  :refresh_client_details, if: :refresh_client_details_needed?
@@ -135,6 +137,24 @@ class ApplicationController < ActionController::API
     User.current = nil
     Location.current = nil
     Audited.store[:current_user] = nil if defined?(Audited)
+  end
+
+  # Two-way sync: tag every change this request makes with the endpoint,
+  # request id and user, so central can trace rows back to the call that
+  # produced them.
+  def tag_sync_request(&)
+    return yield unless SiteSync::Config.site?
+
+    SiteSync::Context.tag(request_id: request.request_id, endpoint: "#{request.request_method} #{request.path}",
+                          user_uuid: User.current&.uuid, &)
+  end
+
+  # While this site is being rebuilt from central, nobody may log in or save.
+  def refuse_while_sync_restoring
+    return unless SiteSync::Config.site? && SiteSync::State.restoring?
+
+    render json: { errors: ['This site is being restored from the central backup. Please wait.'] },
+           status: :service_unavailable
   end
 
   def check_client_version

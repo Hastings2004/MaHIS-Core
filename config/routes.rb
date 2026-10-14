@@ -31,6 +31,38 @@ Rails.application.routes.draw do
   # api namespace so it wins over any generic api/v1 route.
   match '/api/v1/icd/*icd_path', to: 'icd11_proxy#forward', via: %i[get post], format: false
 
+  # Two-way site <-> central sync (prototype). Declared before the main api
+  # namespace so no generic api/v1 route shadows it.
+  namespace :api do
+    namespace :v1 do
+      namespace :site_sync do
+        # central: called by site sync agents (site signature)
+        post 'batches', to: 'batches#create'
+        get 'changes', to: 'feed#changes'
+        post 'patients/hydrate', to: 'feed#hydrate'
+        post 'heartbeat', to: 'heartbeats#create'
+        post 'merkle', to: 'reconciliation#merkle'
+        post 'merkle/rows', to: 'reconciliation#rows'
+        post 'mirror_rows', to: 'reconciliation#mirror_rows'
+        post 'reconciliation_report', to: 'reconciliation#report'
+        get 'restore/manifest', to: 'restore#manifest'
+        get 'restore/export', to: 'restore#export'
+        post 'restore/complete', to: 'restore#complete'
+        # central: administration (admin token)
+        post 'admin/sites', to: 'admin#register'
+        post 'admin/sites/:code/freeze', to: 'admin#freeze'
+        get 'admin/quarantine', to: 'admin#quarantine'
+        post 'admin/quarantine/:id/release', to: 'admin#release'
+        post 'admin/quarantine/:id/reject', to: 'admin#reject'
+        get 'admin/conflicts', to: 'admin#conflicts'
+        get 'admin/dashboard', to: 'admin#dashboard'
+        # site: for logged-in users
+        get 'requests/:request_id', to: 'local#request_changes'
+        get 'status', to: 'local#status'
+      end
+    end
+  end
+
   namespace :api do
     namespace :v1 do
       # Helper for creating dynamic redirect urls with redirect blocks

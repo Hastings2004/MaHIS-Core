@@ -1,0 +1,55 @@
+#!/bin/bash
+# Build the three prototype databases from a copy of the developer's MaHIS
+# database (identical reference data everywhere), add the sync tables, install
+# capture triggers on the two sites, register the sites at central, and send
+# each site's existing rows to central once (the rollout snapshot).
+#
+#   SOURCE_DB=mahis_openmrs_dev SOURCE_USER=wise SOURCE_PASSWORD=... bin/setup
+set -euo pipefail
+BIN="$(cd "$(dirname "$0")" && pwd)"
+source "$BIN/../env.sh" central >/dev/null
+
+"$BIN/mysql_start"
+rm -f "$PROTO_TMP"/secret_SITE* "$PROTO_TMP"/link_*.state
+
+DUMP="$PROTO_TMP/source_dump.sql.gz"
+if [ ! -f "$DUMP" ] || [ "${REFRESH_DUMP:-}" = 1 ]; then
+  echo "Dumping ${SOURCE_DB:-mahis_openmrs_dev} from the main MySQL..."
+  MYSQL_PWD="${SOURCE_PASSWORD:-}" mysqldump -u"${SOURCE_USER:-wise}" -h127.0.0.1 -P"${SOURCE_PORT:-3306}" \
+    --single-transaction --routines --no-tablespaces --set-gtid-purged=OFF "${SOURCE_DB:-mahis_openmrs_dev}" \
+    | sed -E 's/DEFINER=`[^`]+`@`[^`]+`//g' | gzip > "$DUMP"
+fi
+
+for db in mahis_central mahis_site_a mahis_site_b; do
+  echo "Loading $db..."
+  proto_mysql -e "DROP DATABASE IF EXISTS $db; CREATE DATABASE $db DEFAULT CHARACTER SET utf8mb3 COLLATE utf8mb3_unicode_ci;"
+  # Bulk load without binary logging: it is a copy, not a change to replicate.
+  { echo "SET sql_log_bin = 0;"; gunzip -c "$DUMP"; } | proto_mysql "$db"
+done
+
+MIGRATE='
+  require Rails.root.join("db/migrate/20261014000000_create_site_sync_tables.rb").to_s
+  CreateSiteSyncTables.new.migrate(:up)
+  ActiveRecord::Base.lease_connection.execute("INSERT IGNORE INTO schema_migrations (version) VALUES (\"20261014000000\")")
+'
+cd "$APP_DIR"
+for node in central a b; do
+  ( source "$BIN/../env.sh" "$node" && bin/rails runner "$MIGRATE" && echo "sync tables created ($node)" )
+done
+
+( source "$BIN/../env.sh" central
+  bin/rails runner '
+    SiteSync::Central.register_site("SITEA", name: "Site A (demo)", secret: ENV["SITEA_SECRET"])
+    SiteSync::Central.register_site("SITEB", name: "Site B (demo)", secret: ENV["SITEB_SECRET"])
+    puts "registered SITEA and SITEB"' )
+
+for node in a b; do
+  ( source "$BIN/../env.sh" "$node"
+    # Demo login: a fixed API token for "admin", so the demo scripts call the
+    # real endpoints without the password/passkey flow.
+    proto_mysql "${DATABASE_URL##*/}" -e "UPDATE users SET authentication_token = 'demo-token',
+      token_expiry_time = NOW() + INTERVAL 1 YEAR WHERE username = 'admin'"
+    bin/rake site_sync:install
+    bin/rake site_sync:snapshot )
+done
+echo "Setup done. Next: bin/start (servers, link simulator and agents)."

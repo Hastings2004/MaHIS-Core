@@ -1,0 +1,20 @@
+#!/bin/bash
+# Control the simulated link between a site and central.
+#   bin/link A cut          site A goes offline
+#   bin/link A restore      back online
+#   bin/link A slow 256     256 kbit/s
+#   bin/link A drop-acks    central commits batches but A never gets the answer
+#   bin/link A status
+set -euo pipefail
+source "$(dirname "$0")/../env.sh" central >/dev/null
+site="${1:?site A or B}"; cmd="${2:-status}"
+file="$PROTO_TMP/link_${site^^}.state"
+case "$cmd" in
+  cut|down) echo down > "$file" ;;
+  restore|up) echo up > "$file" ;;
+  slow) echo "slow ${3:-256}" > "$file" ;;
+  drop-acks) echo drop_acks > "$file" ;;
+  status) ;;
+  *) echo "unknown command: $cmd" >&2; exit 1 ;;
+esac
+echo "link ${site^^}: $(cat "$file" 2>/dev/null || echo up)"

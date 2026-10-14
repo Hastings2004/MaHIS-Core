@@ -1,0 +1,50 @@
+#!/bin/bash
+# Start the prototype: central and two site servers, the two link simulators
+# and the two site sync agents. Logs: tmp/site_sync_mysql/logs/.
+#   bin/start            everything
+#   bin/start agents     only the two agents (e.g. after bin/stop agents)
+#   bin/start servers    servers and links, no agents
+set -euo pipefail
+BIN="$(cd "$(dirname "$0")" && pwd)"
+source "$BIN/../env.sh" central >/dev/null
+"$BIN/mysql_start" >/dev/null
+LOGS="$PROTO_TMP/logs"; PIDS="$PROTO_TMP/pids"
+mkdir -p "$LOGS" "$PIDS"
+cd "$APP_DIR"
+
+start() { # name command...
+  local name="$1"; shift
+  if [ -f "$PIDS/$name.pid" ] && kill -0 "$(cat "$PIDS/$name.pid")" 2>/dev/null; then
+    echo "$name already running"; return
+  fi
+  # setsid: own session, so closing the terminal does not send SIGHUP (Puma
+  # treats SIGHUP as "stop" even under nohup).
+  setsid nohup "$@" > "$LOGS/$name.log" 2>&1 < /dev/null &
+  echo $! > "$PIDS/$name.pid"
+  echo "started $name (log: $LOGS/$name.log)"
+}
+
+what="${1:-all}"
+if [ "$what" = all ] || [ "$what" = servers ]; then
+  for node in central a b; do
+    ( source "$BIN/../env.sh" "$node"
+      start "server_$node" bin/rails server -b 127.0.0.1 -p "$NODE_PORT" -P "$PIDS/rails_$node.pid" )
+  done
+  for site in A B; do
+    port=$([ "$site" = A ] && echo 3211 || echo 3212)
+    [ -f "$PROTO_TMP/link_$site.state" ] || echo up > "$PROTO_TMP/link_$site.state"
+    start "link_$site" ruby "$BIN/link_proxy.rb" "$port" 3200 "$PROTO_TMP/link_$site.state"
+  done
+  echo -n "waiting for central"
+  for _ in $(seq 1 90); do
+    curl -s -o /dev/null "http://127.0.0.1:3200/api/v1/site_sync/admin/dashboard.json?token=$SITE_SYNC_ADMIN_TOKEN" && break
+    echo -n .; sleep 1
+  done
+  echo
+fi
+if [ "$what" = all ] || [ "$what" = agents ]; then
+  for node in a b; do
+    ( source "$BIN/../env.sh" "$node"; start "agent_$node" bin/rake site_sync:agent )
+  done
+fi
+echo "Dashboard: http://127.0.0.1:3200/api/v1/site_sync/admin/dashboard?token=$SITE_SYNC_ADMIN_TOKEN"
