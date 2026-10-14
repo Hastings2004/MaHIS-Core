@@ -130,10 +130,23 @@ module SiteSync
       end
 
       events = JSON.parse(events_json)
+      # A site whose clock ran ahead (a dead BIOS battery, a typo) must not
+      # win every conflict, but refusing its batches would block it for as
+      # long as the clock was wrong. Cap such clocks at central's time; the
+      # capped events cannot win a conflict automatically (resolve_fields).
       limit = Hlc.now_us + Config.max_clock_ahead_us
-      if events.any? { |e| e['hlc'].to_i > limit }
-        Central.alert(@site_code, 'clock_ahead', 'Batch refused: site clock is ahead of central by more than the allowed margin')
-        return refuse(422, 'clock_ahead', central_time_us: Hlc.now_us)
+      clamped = events.count { |e| e['hlc'].to_i > limit }
+      if clamped.positive?
+        events.each do |e|
+          next unless e['hlc'].to_i > limit
+
+          e['site_hlc'] = e['hlc']
+          e['hlc'] = limit
+          e['clock_clamped'] = true
+        end
+        Central.alert(@site_code, 'clock_ahead',
+                      "#{clamped} change(s) stamped more than #{Config.max_clock_ahead_us / 1_000_000}s ahead of central; " \
+                      'capped at central time. Check the site server clock.')
       end
 
       ack = nil
@@ -458,7 +471,9 @@ module SiteSync
         existing = [current[col], version&.fetch('site_code'), version&.fetch('hlc')&.to_i]
         if based_on_current
           changes[col] = value
-        elsif Config.protected_fields(table).include?(col)
+        elsif Config.protected_fields(table).include?(col) || event['clock_clamped']
+          # Protected fields, and edits whose clock could not be trusted, go
+          # to a data officer instead of last-writer-wins.
           conflict(table, event['uuid'], col, 'protected', kept: existing, losing: incoming)
           lost = true
         elsif version.nil? || event['hlc'].to_i > version['hlc'].to_i

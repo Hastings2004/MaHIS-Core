@@ -311,6 +311,47 @@ scene 'tamper', '8. The queue cannot be edited, and a changed batch is caught' d
     sh('bin/rake site_sync:push', node: :a)
     check('the genuine batch was accepted') { at_central?('person', patient[:uuid]) }
   end
+
+  step 'Someone captures a signed request from Site A and sends it again, or changes its parameters'
+  secret = sh('echo $SITE_SYNC_SECRET', node: :a, quiet: true).strip
+  nonce = SecureRandom.hex(16)
+  first, = signed_get('SITEA', secret, '/api/v1/site_sync/changes?cursor=0&limit=1', nonce:)
+  replay, body = signed_get('SITEA', secret, '/api/v1/site_sync/changes?cursor=0&limit=1', nonce:)
+  altered, = signed_get('SITEA', secret, '/api/v1/site_sync/changes?cursor=0&limit=2000',
+                        nonce: SecureRandom.hex(16), sign_path: '/api/v1/site_sync/changes?cursor=0&limit=1')
+  check('the original request is accepted') { first == 200 }
+  check('the same request sent again is refused as a replay') { replay == 401 && body['error'] == 'replayed' }
+  check('a request with altered parameters is refused') { altered == 401 }
+end
+
+# ---------------------------------------------------------------------------
+scene 'clock', '8b. A site server\'s clock is a year ahead' do
+  patient = SHARED[:patient_a] || register_patient(:a, given: 'Clock', family: "Skew#{unique_letters}")
+  new_family = "Mtambo#{unique_letters}"
+  step 'Site A\'s clock jumps a year ahead while a clinician edits a name'
+  db(:a).query('SET TIMESTAMP = UNIX_TIMESTAMP() + 31536000')
+  db(:a).query("UPDATE person_name SET family_name = '#{new_family}' WHERE person_id = #{patient[:person_id]} AND voided = 0")
+  db(:a).query('SET TIMESTAMP = DEFAULT')
+  name_at_central = lambda do
+    value(:central, "SELECT n.family_name FROM person_name n JOIN person p ON p.person_id = n.person_id
+                     WHERE p.uuid = '#{patient[:uuid]}' AND n.voided = 0")
+  end
+  wait_for('edit at central') { name_at_central.call == new_family }
+  check('central still accepts the site\'s changes (the site is not blocked)') { name_at_central.call == new_family }
+  check('central raised a clock alert') do
+    value(:central, "SELECT COUNT(*) FROM sync_alerts WHERE site_code = 'SITEA' AND kind = 'clock_ahead'").to_i.positive?
+  end
+  limit = ((Time.now.to_r + 3600) * 1_000_000).to_i
+  check('the year-ahead time did not enter central\'s records') do
+    value(:central, "SELECT MAX(hlc) FROM sync_site_mirror WHERE site_code = 'SITEA'").to_i < limit
+  end
+  check('Site A\'s clock state was pulled back to central\'s time') do
+    value(:a, "SELECT value FROM sync_state WHERE name = 'hlc'").to_i < limit
+  end
+  step 'The next ordinary change from Site A flows normally'
+  later = register_patient(:a, given: 'After', family: "Clockfix#{unique_letters}")
+  wait_for('next change at central') { at_central?('person', later[:uuid]) }
+  check('later changes sync normally') { at_central?('person', later[:uuid]) }
 end
 
 # ---------------------------------------------------------------------------
@@ -331,17 +372,30 @@ scene 'reconcile', '9. Silent corruption at Site B is found and repaired' do
   step 'Nightly reconciliation (Merkle comparison with central\'s copy)'
   report = JSON.parse(sh('bin/rake site_sync:reconcile', node: :b, quiet: true)[/\{.*\}/m])
   report['tables'].each do |table, t|
-    info "#{table.ljust(20)} #{t['differences']} difference(s)" if t['differences'].to_i.positive?
+    next unless t['differences'].to_i.positive?
+
+    info "#{table.ljust(20)} missing at site: #{t['central_only'].size}, differs: #{t['different'].size} " \
+         "(held for review: #{t['held_for_review'].size})"
   end
   measure 'reconciliation bytes exchanged (6 tables, 2 bad rows)', "#{report['bytes_exchanged']} B"
   measure 'reconciliation time', "#{report['seconds']} s"
   differences = report['tables'].values.sum { |t| t['differences'].to_i }
   check('exactly the two damaged rows were found') { differences == 2 }
+  check('the deleted observation was restored automatically, with its original id') do
+    value(:b, "SELECT uuid FROM obs WHERE obs_id = #{obs_row['obs_id']}") == obs_row['uuid']
+  end
+  check('the changed name was NOT overwritten automatically: it is held for a data officer') do
+    report['tables']['person_name']['held_for_review'] == [name_row['uuid']] &&
+      value(:b, "SELECT family_name FROM person_name WHERE person_name_id = #{name_row['person_name_id']}") == 'CORRUPTED'
+  end
+  check('central raised a review alert') do
+    value(:central, "SELECT COUNT(*) FROM sync_alerts WHERE site_code = 'SITEB' AND kind = 'reconciliation_review'").to_i.positive?
+  end
+
+  step 'The data officer confirms central\'s copy is right (REPAIR_DIFFERENT=central)'
+  sh('REPAIR_DIFFERENT=central bin/rake site_sync:reconcile', node: :b, quiet: true)
   check('the name was repaired') do
     value(:b, "SELECT family_name FROM person_name WHERE person_name_id = #{name_row['person_name_id']}") == name_row['family_name']
-  end
-  check('the observation is back, with its original id') do
-    value(:b, "SELECT uuid FROM obs WHERE obs_id = #{obs_row['obs_id']}") == obs_row['uuid']
   end
   again = JSON.parse(sh('bin/rake site_sync:reconcile', node: :b, quiet: true)[/\{.*\}/m])
   check('a second run finds nothing') { again['tables'].values.sum { |t| t['differences'].to_i }.zero? }

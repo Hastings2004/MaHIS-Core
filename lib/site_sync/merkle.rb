@@ -32,8 +32,12 @@ module SiteSync
                else
                  ''
                end
+      # CONV returns a string, and SUM over strings is floating point: it
+      # loses digits and depends on row order. Summing integers gives an exact
+      # DECIMAL, returned as a plain digit string.
       connection.select_rows(<<~SQL).to_h { |prefix, count, sum| [prefix, "#{count}:#{sum}"] }
-        SELECT LEFT(x.row_uuid, #{prefix_len.to_i}) AS prefix, COUNT(*), SUM(CONV(LEFT(x.row_hash, 15), 16, 10))
+        SELECT LEFT(x.row_uuid, #{prefix_len.to_i}) AS prefix, COUNT(*),
+               CAST(SUM(CAST(CONV(LEFT(x.row_hash, 15), 16, 10) AS UNSIGNED)) AS CHAR)
         FROM #{source} #{filter}
         GROUP BY prefix
       SQL
@@ -49,8 +53,10 @@ module SiteSync
       sum = 0
       digests.each_value do |value|
         c, s = value.split(':')
-        count += c.to_i
-        sum += s.to_i
+        # Integer() rather than to_i: a non-integer must fail loudly, not
+        # silently turn "4.6e+21" into 4.
+        count += Integer(c)
+        sum += Integer(s)
       end
       "#{count}:#{sum}"
     end

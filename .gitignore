@@ -33,6 +33,8 @@ log/mahis-user-import-*.log
 /config/master.key
 #Ignoring yml files under configuration
 config/*.yml
+# ...except the sync table config, which holds no secrets and is required.
+!config/site_sync_tables.yml
 
 #Ignoring files created by passenger (if using passenger to run app)
 *.pid.lock

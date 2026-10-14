@@ -9,30 +9,37 @@ module SiteSync
   # changes still in flight are left for the next run.
   #
   # Repair policy:
-  #   row only at the site                -> re-sent to central (a missed capture)
-  #   row only at central, or different   -> central's copy is written back
-  #                                          (the site lost or corrupted it; any
-  #                                          legitimate change would have been
-  #                                          captured)
+  #   row only at the site     -> re-sent to central (a change that escaped capture)
+  #   row only at central      -> central's copy is written back (the site lost it)
+  #   row on both, different   -> held for a data officer. Either side could be
+  #                               right: the site row may be corrupted, or it may
+  #                               hold a real change that escaped capture (a
+  #                               migration, a paused session). The officer
+  #                               chooses: different: 'central' writes central's
+  #                               copy back, different: 'site' re-sends the site's.
   class Reconciler
+    DIFFERENT_POLICIES = [nil, 'central', 'site'].freeze
+
     def initialize(client: Client.new)
       @client = client
       @conn = ActiveRecord::Base.lease_connection
       @bytes = 0
     end
 
-    def run(repair: true, tables: Config.table_names)
+    def run(repair: true, different: nil, tables: Config.table_names)
+      raise ArgumentError, "different must be one of #{DIFFERENT_POLICIES.inspect}" unless DIFFERENT_POLICIES.include?(different)
+
       Sender.new(client: @client).run_once
       return finish(started = Time.now, 'skipped', { 'reason' => 'backlog not yet acknowledged' }) if backlog?
 
       started = Time.now
-      report = tables.index_with { |table| reconcile(table, repair:) }
+      report = tables.index_with { |table| reconcile(table, repair:, different:) }
       finish(started, 'completed', report)
     end
 
     private
 
-    def reconcile(table, repair:)
+    def reconcile(table, repair:, different:)
       level1 = Merkle.site_digests(@conn, table, 2)
       prefixes = compare(table, 2, level1, nil)
       return { 'differences' => 0 } if prefixes.empty?
@@ -48,14 +55,16 @@ module SiteSync
       diff = call('/api/v1/site_sync/merkle/rows', { table:, prefixes:, rows: })
       in_flight = in_flight_uuids(table)
       site_only = diff['site_only'] - in_flight
-      fix_down = (diff['central_only'] + diff['different']) - in_flight
+      central_only = diff['central_only'] - in_flight
+      changed = diff['different'] - in_flight
 
       if repair
-        resend(table, site_only)
-        write_back(table, fix_down)
+        resend(table, site_only + (different == 'site' ? changed : []))
+        write_back(table, central_only + (different == 'central' ? changed : []))
       end
-      { 'differences' => site_only.size + fix_down.size, 'site_only' => site_only,
-        'central_only' => diff['central_only'] - in_flight, 'different' => diff['different'] - in_flight,
+      held = repair && different ? [] : changed
+      { 'differences' => site_only.size + central_only.size + changed.size, 'site_only' => site_only,
+        'central_only' => central_only, 'different' => changed, 'held_for_review' => held,
         'repaired' => repair }
     end
 

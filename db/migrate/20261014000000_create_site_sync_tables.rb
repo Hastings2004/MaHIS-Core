@@ -283,6 +283,17 @@ class CreateSiteSyncTables < ActiveRecord::Migration[7.0]
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3
     SQL
 
+    # One-time values of accepted site requests, so none can be replayed.
+    execute <<~SQL
+      CREATE TABLE sync_request_nonces (
+        nonce CHAR(32) NOT NULL PRIMARY KEY,
+        site_code VARCHAR(16) NOT NULL,
+        site_timestamp BIGINT NULL,
+        seen_at DATETIME(6) NOT NULL,
+        KEY idx_sync_request_nonces_seen (seen_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3
+    SQL
+
     execute <<~SQL
       CREATE TABLE sync_alerts (
         id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -296,7 +307,7 @@ class CreateSiteSyncTables < ActiveRecord::Migration[7.0]
   end
 
   def down
-    %w[sync_alerts sync_deleted_records sync_subscriptions sync_central_log sync_quarantine
+    %w[sync_alerts sync_request_nonces sync_deleted_records sync_subscriptions sync_central_log sync_quarantine
        sync_conflicts sync_field_versions sync_row_owners sync_site_mirror sync_received_batches
        sync_site_lanes sync_sites sync_reconciliation_runs sync_row_versions
        sync_quarantine_notices sync_pending_apply sync_batches sync_change_log sync_state].each do |table|

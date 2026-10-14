@@ -32,8 +32,12 @@ module SiteSync
       request(Net::HTTP::Get, "#{path}#{query}", '')
     end
 
-    def self.signature(secret, method, path, body)
-      OpenSSL::HMAC.hexdigest('SHA256', secret, "#{method}\n#{path}\n#{body}")
+    # Signs the method, the full path including the query string (so cursor,
+    # table and id parameters cannot be altered), a timestamp, a one-time
+    # nonce (central refuses a nonce it has seen, so a captured request cannot
+    # be replayed) and the body.
+    def self.signature(secret, method, full_path, timestamp, nonce, body)
+      OpenSSL::HMAC.hexdigest('SHA256', secret, "#{method}\n#{full_path}\n#{timestamp}\n#{nonce}\n#{body}")
     end
 
     private
@@ -43,8 +47,12 @@ module SiteSync
       req = klass.new(full_path)
       req['Content-Type'] = 'application/json'
       req['Accept-Encoding'] = 'gzip'
+      timestamp = Hlc.now_us.to_s
+      nonce = SecureRandom.hex(16)
       req['X-Site-Code'] = @site_code
-      req['X-Site-Signature'] = self.class.signature(@secret, req.method, full_path.split('?').first, body)
+      req['X-Site-Timestamp'] = timestamp
+      req['X-Site-Nonce'] = nonce
+      req['X-Site-Signature'] = self.class.signature(@secret, req.method, full_path, timestamp, nonce, body)
       wire = body
       if gzip && body.present?
         wire = Zlib.gzip(body)

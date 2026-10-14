@@ -160,6 +160,20 @@ module Demo
     JSON.parse(response.body)
   end
 
+  # A request to central signed the way a site agent signs it, with a chosen
+  # nonce, so a scene can replay or alter it.
+  def signed_get(site_code, secret, full_path, nonce:, sign_path: full_path)
+    require 'openssl'
+    timestamp = (Time.now.to_r * 1_000_000).to_i.to_s
+    signature = OpenSSL::HMAC.hexdigest('SHA256', secret, "GET\n#{sign_path}\n#{timestamp}\n#{nonce}\n")
+    http = Net::HTTP.new('127.0.0.1', API_PORTS[:central])
+    request = Net::HTTP::Get.new(full_path)
+    { 'X-Site-Code' => site_code, 'X-Site-Timestamp' => timestamp, 'X-Site-Nonce' => nonce,
+      'X-Site-Signature' => signature }.each { |k, v| request[k] = v }
+    response = http.request(request)
+    [response.code.to_i, (JSON.parse(response.body) rescue {})]
+  end
+
   # ---- processes ------------------------------------------------------------
 
   def sh(command, node: nil, quiet: false)

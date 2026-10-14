@@ -191,9 +191,11 @@ namespace :site_sync do
     puts SiteSync::Heartbeat.new.send_once.to_json
   end
 
-  desc 'Reconcile this site against central (REPAIR=false to only report)'
+  desc 'Reconcile this site against central (REPAIR=false to only report; ' \
+       'REPAIR_DIFFERENT=central|site to settle rows that differ, after review)'
   task reconcile: :environment do
-    puts JSON.pretty_generate(SiteSync::Reconciler.new.run(repair: ENV['REPAIR'] != 'false'))
+    report = SiteSync::Reconciler.new.run(repair: ENV['REPAIR'] != 'false', different: ENV['REPAIR_DIFFERENT'].presence)
+    puts JSON.pretty_generate(report)
   end
 
   desc 'Fetch one patient from central: rake site_sync:hydrate[uuid_or_identifier,reason]'

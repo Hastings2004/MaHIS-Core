@@ -1,0 +1,80 @@
+# Two-way site <-> central sync (prototype): the one place that says what is
+# synced and how. Triggers, the wire format, ownership checks and the CI check
+# (`rake site_sync:check`) are all generated from this file.
+#
+# class:            shared_identity -> any site may edit; resolved field by field
+#                   clinical        -> only the site that created the row may edit
+# lane:             critical batches are always sent before bulk batches
+# patient_ref:      column holding the patient's person id ("self" = this row)
+# refs:             integer FK -> synced table; sent on the wire as the target's uuid
+# protected_fields: never auto-resolved when two sites change them concurrently
+schema_version: 1
+
+tables:
+  person:
+    pk: person_id
+    class: shared_identity
+    lane: critical
+    patient_ref: self
+    protected_fields: [gender, birthdate, dead, death_date]
+
+  patient:
+    pk: patient_id
+    # patient has no uuid column: its id *is* the person id, so it uses the
+    # person's uuid.
+    uuid_via: person
+    class: shared_identity
+    lane: critical
+    patient_ref: self
+    refs: { patient_id: person }
+
+  person_name:
+    pk: person_name_id
+    class: shared_identity
+    lane: critical
+    patient_ref: person_id
+    refs: { person_id: person }
+
+  patient_identifier:
+    pk: patient_identifier_id
+    class: shared_identity
+    lane: critical
+    patient_ref: patient_id
+    refs: { patient_id: patient }
+    protected_fields: [identifier]
+
+  encounter:
+    pk: encounter_id
+    class: clinical
+    lane: bulk
+    patient_ref: patient_id
+    refs: { patient_id: patient, provider_id: person }
+
+  obs:
+    pk: obs_id
+    class: clinical
+    lane: bulk
+    patient_ref: person_id
+    refs: { person_id: person, encounter_id: encounter, obs_group_id: obs }
+
+# Reference data is not synced by the prototype; every node is seeded with the
+# same copy. Columns pointing at it are matched either by id (central-managed
+# data, so ids are the same everywhere) or by uuid (site-managed data).
+reference_refs:
+  creator: { table: users, match: uuid }
+  changed_by: { table: users, match: uuid }
+  voided_by: { table: users, match: uuid }
+  cause_of_death: { table: concept, match: id }
+  concept_id: { table: concept, match: id }
+  value_coded: { table: concept, match: id }
+  value_coded_name_id: { table: concept_name, match: id }
+  value_drug: { table: drug, match: id }
+  encounter_type: { table: encounter_type, match: id }
+  identifier_type: { table: patient_identifier_type, match: id }
+  location_id: { table: location, match: id }
+  program_id: { table: program, match: id }
+
+# Columns pointing at tables outside the prototype's scope. Their value is kept
+# in central's backup copy of the site (so a restore is exact) but not copied
+# to another node, where the id would mean something else.
+unsynced_refs: [visit_id, form_id, order_id, value_group_id]

@@ -49,6 +49,12 @@ module Api
             VALUES (#{q(site_code)}, #{q(payload['status'])}, #{q(payload.to_json)}, #{payload['bytes_exchanged'].to_i},
                     NOW(6), NOW(6))
           SQL
+          held = (payload['tables'] || {}).sum { |_, t| Array(t['held_for_review']).size }
+          if held.positive?
+            ::SiteSync::Central.alert(site_code, 'reconciliation_review',
+                                      "#{held} row(s) differ between the site and central's copy; a data officer must " \
+                                      'choose which is right (rake site_sync:reconcile REPAIR_DIFFERENT=central|site)')
+          end
           last_two = connection.select_values(<<~SQL)
             SELECT report_json FROM sync_reconciliation_runs WHERE site_code = #{q(site_code)} ORDER BY id DESC LIMIT 2
           SQL

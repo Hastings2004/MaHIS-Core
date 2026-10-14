@@ -139,6 +139,7 @@ module SiteSync
 
     def acknowledge(batch, ack)
       @conn.transaction do
+        recover_clock(ack['central_time_us'].to_i)
         @conn.execute(<<~SQL)
           UPDATE sync_batches SET status = 'acked', acked_at = NOW(6), ack_json = #{q(ack.to_json)}, last_error = NULL
           WHERE id = #{batch['id']}
@@ -161,6 +162,19 @@ module SiteSync
       @stats[:acked_batches] += 1
       @stats[:acked_events] += batch['event_count'].to_i
       @stats[:quarantined] += Array(ack['quarantined']).size
+    end
+
+    # The stored HLC never goes backwards on its own, so after a clock that
+    # ran ahead is corrected it would stay ahead for as long as the clock was
+    # wrong. Pull it back to central's time once central has told us its time.
+    def recover_clock(central_us)
+      return unless central_us.positive?
+
+      stored = State.get_i('hlc', 0)
+      return unless stored > central_us + Config.max_clock_ahead_us
+
+      State.set('hlc', central_us)
+      @stats[:clock_reset] += 1
     end
 
     # Central expects an earlier sequence number than the one we sent (it
