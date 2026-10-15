@@ -57,22 +57,24 @@ tables:
     patient_ref: person_id
     refs: { person_id: person, encounter_id: encounter, obs_group_id: obs }
 
-# Reference data is not synced by the prototype; every node is seeded with the
-# same copy. Columns pointing at it are matched either by id (central-managed
-# data, so ids are the same everywhere) or by uuid (site-managed data).
+# Reference data is not synced by the prototype; every node must hold the same
+# rows. Columns pointing at it travel as the referenced row's uuid and are
+# matched by uuid on the receiving node, because integer ids differ between
+# installations (see db/mahis_pro_to_dev_concept_id_mapping.json).
+# `match: id` remains available for data known to have identical ids everywhere.
 reference_refs:
   creator: { table: users, match: uuid }
   changed_by: { table: users, match: uuid }
   voided_by: { table: users, match: uuid }
-  cause_of_death: { table: concept, match: id }
-  concept_id: { table: concept, match: id }
-  value_coded: { table: concept, match: id }
-  value_coded_name_id: { table: concept_name, match: id }
-  value_drug: { table: drug, match: id }
-  encounter_type: { table: encounter_type, match: id }
-  identifier_type: { table: patient_identifier_type, match: id }
-  location_id: { table: location, match: id }
-  program_id: { table: program, match: id }
+  cause_of_death: { table: concept, match: uuid }
+  concept_id: { table: concept, match: uuid }
+  value_coded: { table: concept, match: uuid }
+  value_coded_name_id: { table: concept_name, match: uuid }
+  value_drug: { table: drug, match: uuid }
+  encounter_type: { table: encounter_type, match: uuid }
+  identifier_type: { table: patient_identifier_type, match: uuid }
+  location_id: { table: location, match: uuid }
+  program_id: { table: program, match: uuid }
 
 # Columns pointing at tables outside the prototype's scope. Their value is kept
 # in central's backup copy of the site (so a restore is exact) but not copied

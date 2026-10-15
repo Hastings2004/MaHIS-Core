@@ -15,8 +15,8 @@ module SiteSync
   #                               right: the site row may be corrupted, or it may
   #                               hold a real change that escaped capture (a
   #                               migration, a paused session). The officer
-  #                               chooses: different: 'central' writes central's
-  #                               copy back, different: 'site' re-sends the site's.
+  #                               decides per row (central_uuids / site_uuids),
+  #                               or for every held row at once (different:).
   class Reconciler
     DIFFERENT_POLICIES = [nil, 'central', 'site'].freeze
 
@@ -26,20 +26,25 @@ module SiteSync
       @bytes = 0
     end
 
-    def run(repair: true, different: nil, tables: Config.table_names)
+    # different:     'central' or 'site' settles every differing row that way.
+    # central_uuids: rows where central's copy is right (written back here).
+    # site_uuids:    rows where this site's copy is right (re-sent to central).
+    def run(repair: true, different: nil, central_uuids: [], site_uuids: [], tables: Config.table_names)
       raise ArgumentError, "different must be one of #{DIFFERENT_POLICIES.inspect}" unless DIFFERENT_POLICIES.include?(different)
+      raise ArgumentError, 'a row cannot be settled both ways' if (central_uuids & site_uuids).any?
 
+      @decisions = { different:, central: central_uuids, site: site_uuids }
       Sender.new(client: @client).run_once
       return finish(started = Time.now, 'skipped', { 'reason' => 'backlog not yet acknowledged' }) if backlog?
 
       started = Time.now
-      report = tables.index_with { |table| reconcile(table, repair:, different:) }
+      report = tables.index_with { |table| reconcile(table, repair:) }
       finish(started, 'completed', report)
     end
 
     private
 
-    def reconcile(table, repair:, different:)
+    def reconcile(table, repair:)
       level1 = Merkle.site_digests(@conn, table, 2)
       prefixes = compare(table, 2, level1, nil)
       return { 'differences' => 0 } if prefixes.empty?
@@ -58,11 +63,13 @@ module SiteSync
       central_only = diff['central_only'] - in_flight
       changed = diff['different'] - in_flight
 
+      to_site = @decisions[:different] == 'central' ? changed : changed & @decisions[:central]
+      to_central = @decisions[:different] == 'site' ? changed : changed & @decisions[:site]
       if repair
-        resend(table, site_only + (different == 'site' ? changed : []))
-        write_back(table, central_only + (different == 'central' ? changed : []))
+        resend(table, site_only + to_central)
+        write_back(table, central_only + to_site)
       end
-      held = repair && different ? [] : changed
+      held = repair ? changed - to_site - to_central : changed
       { 'differences' => site_only.size + central_only.size + changed.size, 'site_only' => site_only,
         'central_only' => central_only, 'different' => changed, 'held_for_review' => held,
         'repaired' => repair }

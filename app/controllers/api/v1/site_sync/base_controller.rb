@@ -7,6 +7,9 @@ module Api
       # site (HMAC signature with the site's secret), not a user, so they do
       # not inherit ApplicationController's user login.
       class BaseController < ActionController::API
+        # How long accepted request nonces are remembered (see HeartbeatsController).
+        NONCE_DAYS = 90
+
         before_action :require_central
         before_action :authenticate_site
 
@@ -60,9 +63,16 @@ module Api
           end
 
           # Each signed request is accepted once. There is deliberately no
-          # tight time window: a site with a wrong clock must still be able to
-          # sync (its clock is handled in CentralIngest), so nonces are kept
-          # for 90 days instead.
+          # tight time window: a site whose clock runs ahead must still be able
+          # to sync (CentralIngest caps its clock). But nonces are only kept for
+          # NONCE_DAYS, so anything signed longer ago than that is refused, or
+          # it could be replayed once its nonce is forgotten.
+          if timestamp.to_i < ::SiteSync::Hlc.now_us - (NONCE_DAYS - 1) * 86_400 * 1_000_000
+            ::SiteSync::Central.alert(site_code, 'stale_request',
+                                      "Refused a request signed more than #{NONCE_DAYS - 1} days ago " \
+                                      '(a replay, or a site clock far behind)')
+            return render json: { status: 'refused', error: 'stale_request' }, status: :unauthorized
+          end
           connection.execute(<<~SQL)
             INSERT INTO sync_request_nonces (nonce, site_code, site_timestamp, seen_at)
             VALUES (#{q(nonce)}, #{q(site_code)}, #{q(timestamp.to_i)}, NOW(6))

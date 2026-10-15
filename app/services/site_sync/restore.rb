@@ -7,14 +7,17 @@ module SiteSync
   # opens a new epoch and issues a new secret for the new server (the old
   # server's secret stops working). Then, on the new server:
   #   1. the site is put in "restoring" mode (the API refuses requests)
-  #   2. every synced table is downloaded in resumable chunks and written with
-  #      its original local ids, so printed labels and lab orders stay valid
+  #   2. every synced table is downloaded in pages and written with its
+  #      original local ids, so printed labels and lab orders stay valid. Each
+  #      page is one multi-row insert, committed together with the restore's
+  #      progress, so a restore interrupted by a power cut resumes where it
+  #      stopped (for the same epoch) instead of starting again
   #   3. each table is checksummed and compared with central's manifest; a
-  #      mismatching table is downloaded again
+  #      mismatching table is downloaded again from scratch
   #   4. the site joins the new epoch, catches up on changes made elsewhere
   #      during the restore, and opens for logins
   class Restore
-    CHUNK = 2000
+    CHUNK = Integer(ENV.fetch('SITE_SYNC_RESTORE_CHUNK', 5000))
 
     attr_reader :report
 
@@ -31,19 +34,29 @@ module SiteSync
       @log.call("Restoring #{Config.site_code} into epoch #{manifest['epoch']}; " \
                 "central's copy is complete up to #{manifest['last_received_at'] || 'the start'}")
       State.set('mode', 'restoring')
+      progress = load_progress(manifest['epoch'])
 
       Context.capture_paused do
         @conn.execute('SET FOREIGN_KEY_CHECKS = 0')
-        clear_local_data
+        if progress['tables'].empty? && progress['last_id'].zero?
+          clear_local_data
+        else
+          @log.call("  resuming an interrupted restore at #{progress['table'] || 'the next table'}")
+        end
         Config.table_names.each do |table|
           expected = manifest['tables'].fetch(table)
           2.times do |attempt|
-            download(table)
+            unless progress['tables'].include?(table) && attempt.zero?
+              resume_from = progress['table'] == table && attempt.zero? ? progress['last_id'] : nil
+              download(table, progress, resume_from)
+            end
             actual = Merkle.table_digest(Merkle.site_digests(@conn, table, 2))
             ok = actual == expected['digest']
             @report['tables'][table] = { 'rows' => expected['count'], 'checksum_ok' => ok, 'attempts' => attempt + 1 }
             @log.call("  #{table}: #{expected['count']} rows, checksum #{ok ? 'OK' : 'MISMATCH'}")
             break if ok
+
+            progress['tables'].delete(table)
           end
         end
       ensure
@@ -63,6 +76,7 @@ module SiteSync
       raise "Central did not accept the restore: #{complete.body}" unless complete.status == 200
 
       caught_up = Puller.new(client: @client).run_once
+      State.set('restore_progress', '')
       State.set('mode', 'normal')
       @report.merge!('epoch' => manifest['epoch'], 'data_safe_up_to' => manifest['last_received_at'],
                      'catch_up' => caught_up.to_s, 'seconds' => (Time.now - started).round(1))
@@ -88,17 +102,43 @@ module SiteSync
       end
     end
 
-    def download(table)
+    # Progress of a restore into `epoch`: tables finished, and how far the
+    # current table got. A restore for an older epoch is not resumed.
+    def load_progress(epoch)
+      saved = JSON.parse(State.get('restore_progress', '').presence || '{}')
+      fresh = { 'epoch' => epoch, 'tables' => [], 'table' => nil, 'last_id' => 0 }
+      saved['epoch'] == epoch ? fresh.merge(saved) : fresh
+    end
+
+    # Download one table, starting after `resume_from` (or from scratch).
+    def download(table, progress, resume_from)
       store = RowStore.new(@conn)
-      @conn.execute("DELETE FROM `#{table}`")
-      after_id = 0
+      @conn.execute("DELETE FROM `#{table}`") if resume_from.nil?
+      after_id = resume_from || 0
       loop do
         page = fetch('/api/v1/site_sync/restore/export', table:, after_id:, limit: CHUNK)
-        @conn.transaction { page['rows'].each { |row| store.put_exact(table, row) } }
-        break if page['rows'].size < CHUNK
-
-        after_id = page['last_id']
+        after_id = page['last_id'] || after_id
+        done = page['rows'].size < CHUNK
+        progress.merge!('table' => table, 'last_id' => after_id)
+        progress['tables'] |= [table] if done
+        # The page and the progress commit together.
+        @conn.transaction do
+          store.put_exact_many(table, page['rows'])
+          State.set('restore_progress', progress.to_json)
+        end
+        simulate_power_cut!
+        break if done
       end
+    end
+
+    # Prototype fault injection: SITE_SYNC_CHAOS_RESTORE_PAGES=n stops the
+    # restore after n pages, as a power cut would.
+    def simulate_power_cut!
+      limit = ENV['SITE_SYNC_CHAOS_RESTORE_PAGES'].to_i
+      return unless limit.positive?
+
+      @pages = (@pages || 0) + 1
+      raise 'Simulated power cut during restore' if @pages >= limit
     end
   end
 end

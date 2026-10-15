@@ -54,6 +54,20 @@ module SiteSync
       )
     end
 
+    # Many rows of one table in a single statement (restore pages). Rows come
+    # from the same JSON_OBJECT expression, so they all have the same columns.
+    def put_exact_many(table, rows)
+      return if rows.empty?
+
+      cols = rows.first.keys
+      updates = cols.reject { |c| c == Config.pk(table) }.map { |c| "`#{c}` = VALUES(`#{c}`)" }
+      values = rows.map { |row| "(#{cols.map { |c| q(row[c]) }.join(', ')})" }
+      @connection.execute(
+        "INSERT INTO `#{table}` (#{cols.map { |c| "`#{c}`" }.join(', ')}) VALUES #{values.join(', ')} " \
+        "ON DUPLICATE KEY UPDATE #{updates.join(', ')}"
+      )
+    end
+
     private
 
     def q(value)

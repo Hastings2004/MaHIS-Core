@@ -25,15 +25,14 @@ module SiteSync
       @id_cache = {}
     end
 
-    # uuid of local row `id` in `table` (a synced table or users).
+    # uuid of local row `id` in `table` (a synced table or reference data).
     def uuid_for(table, id)
       return nil if id.nil?
 
       @uuid_cache[[table, id]] ||= begin
-        via = table == 'users' ? nil : Config.uuid_via(table)
+        via = Config.synced?(table) ? Config.uuid_via(table) : nil
         source = via || table
-        key = table == 'users' ? 'user_id' : Config.pk(via || table)
-        @connection.select_value("SELECT `uuid` FROM `#{source}` WHERE `#{key}` = #{@connection.quote(id)}")
+        @connection.select_value("SELECT `uuid` FROM `#{source}` WHERE `#{key(source)}` = #{@connection.quote(id)}")
       end
     end
 
@@ -42,8 +41,8 @@ module SiteSync
       return nil if uuid.nil?
 
       @id_cache[[table, uuid]] ||=
-        if table == 'users'
-          @connection.select_value("SELECT user_id FROM users WHERE uuid = #{@connection.quote(uuid)}")
+        if !Config.synced?(table)
+          @connection.select_value("SELECT `#{key(table)}` FROM `#{table}` WHERE uuid = #{@connection.quote(uuid)}")
         elsif (via = Config.uuid_via(table))
           @connection.select_value(<<~SQL)
             SELECT t.`#{Config.pk(table)}` FROM `#{table}` t
@@ -105,6 +104,13 @@ module SiteSync
     end
 
     private
+
+    # Primary key column of a synced or reference table.
+    def key(table)
+      return Config.pk(table) if Config.synced?(table)
+
+      (@keys ||= {})[table] ||= @connection.primary_key(table)
+    end
 
     def resolve(target, uuid, col, original)
       return nil if original.nil? && uuid.nil?

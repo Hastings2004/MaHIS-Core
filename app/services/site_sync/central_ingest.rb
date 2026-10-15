@@ -134,14 +134,17 @@ module SiteSync
       # win every conflict, but refusing its batches would block it for as
       # long as the clock was wrong. Cap such clocks at central's time; the
       # capped events cannot win a conflict automatically (resolve_fields).
-      limit = Hlc.now_us + Config.max_clock_ahead_us
+      central_now = Hlc.now_us
+      limit = central_now + Config.max_clock_ahead_us
       clamped = events.count { |e| e['hlc'].to_i > limit }
       if clamped.positive?
         events.each do |e|
           next unless e['hlc'].to_i > limit
 
           e['site_hlc'] = e['hlc']
-          e['hlc'] = limit
+          # Central's real time, not time + margin: a field version stamped
+          # ahead would make genuine edits from other sites lose for minutes.
+          e['hlc'] = central_now
           e['clock_clamped'] = true
         end
         Central.alert(@site_code, 'clock_ahead',

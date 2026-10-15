@@ -191,10 +191,14 @@ namespace :site_sync do
     puts SiteSync::Heartbeat.new.send_once.to_json
   end
 
-  desc 'Reconcile this site against central (REPAIR=false to only report; ' \
-       'REPAIR_DIFFERENT=central|site to settle rows that differ, after review)'
+  desc 'Reconcile this site against central. REPAIR=false only reports. Rows that differ are held unless ' \
+       'settled: REPAIR_CENTRAL=uuid,uuid (central is right) / REPAIR_SITE=uuid,uuid (site is right), ' \
+       'or REPAIR_DIFFERENT=central|site for all of them'
   task reconcile: :environment do
-    report = SiteSync::Reconciler.new.run(repair: ENV['REPAIR'] != 'false', different: ENV['REPAIR_DIFFERENT'].presence)
+    uuids = ->(name) { ENV[name].to_s.split(',').map(&:strip).reject(&:empty?) }
+    report = SiteSync::Reconciler.new.run(repair: ENV['REPAIR'] != 'false', different: ENV['REPAIR_DIFFERENT'].presence,
+                                          central_uuids: uuids.call('REPAIR_CENTRAL'),
+                                          site_uuids: uuids.call('REPAIR_SITE'))
     puts JSON.pretty_generate(report)
   end
 

@@ -392,8 +392,8 @@ scene 'reconcile', '9. Silent corruption at Site B is found and repaired' do
     value(:central, "SELECT COUNT(*) FROM sync_alerts WHERE site_code = 'SITEB' AND kind = 'reconciliation_review'").to_i.positive?
   end
 
-  step 'The data officer confirms central\'s copy is right (REPAIR_DIFFERENT=central)'
-  sh('REPAIR_DIFFERENT=central bin/rake site_sync:reconcile', node: :b, quiet: true)
+  step 'The data officer confirms central\'s copy of that row is right (REPAIR_CENTRAL=<uuid>)'
+  sh("REPAIR_CENTRAL=#{name_row['uuid']} bin/rake site_sync:reconcile", node: :b, quiet: true)
   check('the name was repaired') do
     value(:b, "SELECT family_name FROM person_name WHERE person_name_id = #{name_row['person_name_id']}") == name_row['family_name']
   end
@@ -431,13 +431,29 @@ scene 'restore', '10. Site B\'s server is lost and rebuilt from central' do
   db(:b).query('SET @sync_capture_paused = NULL, FOREIGN_KEY_CHECKS = 1')
   info "Site B now has #{value(:b, 'SELECT COUNT(*) FROM person')} people"
 
-  step 'Restore onto the new server (rake site_sync:restore, with the newly issued secret)'
+  step 'Restore onto the new server; the power fails part-way through'
   File.write(File.join(ROOT, 'tmp/site_sync_mysql/secret_SITEB'), frozen['secret'])
+  interrupted = begin
+    sh('SITE_SYNC_RESTORE_CHUNK=100 SITE_SYNC_CHAOS_RESTORE_PAGES=4 bin/rake site_sync:restore', node: :b, quiet: true)
+    false
+  rescue Demo::Failure
+    true
+  end
+  partial = value(:b, 'SELECT COUNT(*) FROM obs').to_i + value(:b, 'SELECT COUNT(*) FROM person').to_i
+  info "restore stopped after #{partial} people + observations had been written"
+  check('the first restore attempt was cut off part-way') { interrupted }
+  check('the API refuses logins while the site is half-restored') do
+    sleep 6 # the restoring flag is cached for 5 s
+    api(:b, :get, '/api/v1/site_sync/status').first == 503
+  end
+
+  step 'Power is back: run the restore again; it resumes instead of starting over'
   started = Time.now
-  out = sh('bin/rake site_sync:restore', node: :b)
+  out = sh('SITE_SYNC_RESTORE_CHUNK=100 bin/rake site_sync:restore', node: :b)
+  check('the second run resumed where the first stopped') { out.include?('resuming an interrupted restore') }
   elapsed = (Time.now - started).round(1)
   restored_rows = tables.sum { |t| value(:b, "SELECT COUNT(*) FROM `#{t}`").to_i }
-  measure 'restore time (incl. ~15 s Rails boot)', "#{elapsed} s for #{restored_rows} rows"
+  measure 'resumed restore time (incl. ~15 s Rails boot)', "#{elapsed} s for #{restored_rows} rows"
 
   check('every table matches central\'s checksum') { out.scan('checksum OK').size == tables.size }
   check('every person has the same local id as before') do
@@ -455,6 +471,8 @@ scene 'restore', '10. Site B\'s server is lost and rebuilt from central' do
   end
 
   step 'Site B goes live again'
+  sleep 6 # let the API notice the restore has finished (restoring flag cached for 5 s)
+  check('the API accepts requests again') { api(:b, :get, '/api/v1/site_sync/status').first == 200 }
   sh("#{PROTO}/bin/start agents", quiet: true)
   fresh = register_patient(:b, given: 'Back', family: 'Online')
   wait_for('new patient at central') { at_central?('person', fresh[:uuid]) }

@@ -53,7 +53,8 @@ module Api
           if held.positive?
             ::SiteSync::Central.alert(site_code, 'reconciliation_review',
                                       "#{held} row(s) differ between the site and central's copy; a data officer must " \
-                                      'choose which is right (rake site_sync:reconcile REPAIR_DIFFERENT=central|site)')
+                                      'choose which is right per row (rake site_sync:reconcile ' \
+                                      'REPAIR_CENTRAL=uuid,... or REPAIR_SITE=uuid,...)')
           end
           last_two = connection.select_values(<<~SQL)
             SELECT report_json FROM sync_reconciliation_runs WHERE site_code = #{q(site_code)} ORDER BY id DESC LIMIT 2

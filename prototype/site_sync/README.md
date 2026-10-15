@@ -32,7 +32,9 @@ Demo scenes: `live`, `offline`, `power_cut`, `lost_ack`, `conflict`,
 
 ## Results (last full run, 14 Oct 2026, laptop under WSL)
 
-**60 of 60 checks passed** (after the code-review fixes). Every scene behaved as designed:
+**63 of 64 checks passed** (15 Oct 2026, after both code reviews). Every sync
+scene behaved as designed; the one miss is the capture-overhead target (see
+below).
 
 | Scene | What was shown |
 |---|---|
@@ -46,19 +48,21 @@ Demo scenes: `live`, `offline`, `power_cut`, `lost_ack`, `conflict`,
 | tamper | The app's MySQL account cannot delete queued changes; a batch edited after sealing was refused with an alert; a replayed or altered signed request was refused |
 | clock | Site A's clock jumped a year ahead: its changes were still accepted, capped at central's time with an alert, and later changes flowed normally |
 | reconcile | Two rows corrupted behind the app's back were found by Merkle comparison (8 KB exchanged). The deleted row came back automatically; the changed row was held until a data officer approved the repair |
-| restore | Site B wiped and rebuilt from central in 10 s (1 001 rows): exact checksums verified, same local ids, new epoch; the old server stays locked out |
+| restore | Site B wiped and rebuilt from central: a first attempt was cut off part-way (logins refused meanwhile), the second resumed and finished; exact checksums verified, same local ids, new epoch; the old server stays locked out |
 
 | Measurement | Value |
 |---|---|
-| Bytes per change, gzip (as sent) | 118 B (1 321 B uncompressed) |
-| Changes per minute a 256 kbit/s link carries at the 50% cap | ~8 000 |
+| Site A → central lag (demo push interval 2 s) | 0.6 s |
+| Bytes per change, gzip (as sent) | 137 B (1 512 B uncompressed; foreign keys travel as uuids) |
+| Changes per minute a 256 kbit/s link carries at the 50% cap | ~7 000 |
 | Rollout snapshot, 2 sites × ~1 000 rows | 35 s |
-| Capture overhead, visit + 20 obs (committed) | 6.5% in this run (43.0 → 45.8 ms) |
+| Reconciliation, 6 tables with 2 damaged rows | 1.2 s, 7.7 KB exchanged |
+| Capture overhead, visit + 20 obs (committed) | **not settled**: 6.5% to 88% across runs |
 
-**Capture overhead is not settled.** This run met the 10% target, but earlier
-runs on the same laptop measured 10% to 88%: disk timing under WSL varies
-too much (one configuration ranged from 44 ms to 301 ms per save). Measure it
-on a real site server with `rake site_sync:benchmark` (stop the agent first).
+**Capture overhead is not settled.** Runs on the same laptop measured anywhere
+from 6.5% to 88% (28.7% in the latest): disk timing under WSL varies too much
+(one configuration ranged from 44 ms to 301 ms per save). Measure it on a real
+site server with `rake site_sync:benchmark` (stop the agent first).
 
 ## Known limits of the prototype
 
@@ -66,24 +70,25 @@ on a real site server with `rake site_sync:benchmark` (stop the agent first).
   the downstream feed stays in commit order. A large catch-up from one site
   delays the others (seen during the rollout snapshot); production should use a
   committed-watermark instead.
-- **Reference data is not synced.** Concepts, users and locations must be identical
-  on every node. Concepts and locations match by id, users by uuid.
+- **Reference data is not synced.** Concepts, drugs, users, locations and
+  programs must exist on every node. They are matched by uuid, so their integer
+  ids may differ between installations.
 - **Out-of-scope columns** (`visit_id`, `order_id`, `form_id`, `value_group_id`)
   are kept in central's backup copy but not copied to other nodes.
 - **HMAC signatures instead of mutual TLS**, and a demo API token instead of
   the login flow. Signatures cover the full URL, a timestamp and a one-time
-  nonce; central refuses a repeated nonce (kept 90 days). There is
-  deliberately no tight time window, because a site with a wrong clock must
-  still be able to sync.
+  nonce; central refuses a repeated nonce (kept 90 days) and anything signed
+  more than 89 days ago. There is deliberately no tight time window, because a
+  site whose clock runs ahead must still be able to sync. The nonce table gets
+  about 3 500 rows a day per site; production should partition it by day and
+  drop old partitions.
 - **Hard deletes.** `site_sync:check` flags three hard deletes in
   `DuplicateIdentifierCleanupTask`. They are still captured (as tombstones) but
   should become voids.
-- **Restore writes one row at a time** and restarts a table from zero if
-  interrupted. Fine for the demo; batch the inserts and make it resumable before
-  quoting a restore time for a real-sized site.
-- **Reference data by id.** Concepts and locations are matched by integer id,
-  which only works because every node is a copy of the same database. Switch
-  them to uuid matching (as users already are) before the pilot.
+- **Restore speed on a real-sized site is not measured.** Restore writes each
+  page of rows in one statement and resumes after an interruption, but the demo
+  has only about 1 000 rows. Time it on a copy of a real site before quoting the
+  8-hour target.
 - **Grants.** `site_sync:grants` only adds rights; an app user that already has
   `ALL PRIVILEGES` must be revoked first.
 - **Parked downstream rows are retried forever.** They need an age or attempt limit,
@@ -108,12 +113,18 @@ on a real site server with `rake site_sync:benchmark` (stop the agent first).
   does not flag them every night.
 - **Reconciliation never overwrites a row that differs on both sides on its
   own.** Missing rows are repaired automatically; a row that differs is held
-  for a data officer, who settles it with
-  `rake site_sync:reconcile REPAIR_DIFFERENT=central` (or `=site`).
-- **A site clock that runs ahead is capped, not refused.** Central caps such
-  changes at its own time, raises an alert, and sends them to review instead of
-  letting them win conflicts. The site resets its stored clock from central's
-  time.
+  for a data officer, who settles each row:
+  `rake site_sync:reconcile REPAIR_CENTRAL=<uuid>,<uuid> REPAIR_SITE=<uuid>`
+  (central's copy is right / the site's copy is right), or all held rows at
+  once with `REPAIR_DIFFERENT=central|site`.
+- **A site clock that runs ahead is capped, not refused.** Central stamps such
+  changes with its own current time (not time plus the allowed margin, which
+  would let them beat genuine edits from other sites), raises an alert, and
+  sends any conflict they cause to review. The site resets its stored clock
+  from central's time.
+- **Restore resumes.** Each page and the restore's progress commit together,
+  so after a power cut the restore continues from the last page for the same
+  epoch; a table that fails its checksum is downloaded again from scratch.
 
 ## Where things are
 

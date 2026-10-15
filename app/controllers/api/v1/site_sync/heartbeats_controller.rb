@@ -23,7 +23,11 @@ module Api
                                       "Only #{payload['triggers_installed']} of #{payload['triggers_expected']} capture triggers installed")
           end
           # Request nonces only need to outlive any realistic replay attempt.
-          connection.execute('DELETE FROM sync_request_nonces WHERE seen_at < NOW(6) - INTERVAL 90 DAY LIMIT 10000')
+          # (Production: partition this table by day and drop old partitions;
+          # it gets about 3 500 rows a day per site.)
+          connection.execute(
+            "DELETE FROM sync_request_nonces WHERE seen_at < NOW(6) - INTERVAL #{NONCE_DAYS} DAY LIMIT 10000"
+          )
           render json: { central_time_us: central_us, clock_offset_s: offset_s }
         end
       end
