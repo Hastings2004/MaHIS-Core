@@ -72,7 +72,12 @@ site server with `rake site_sync:benchmark` (stop the agent first).
   committed-watermark instead.
 - **Reference data is not synced.** Concepts, drugs, users, locations and
   programs must exist on every node. They are matched by uuid, so their integer
-  ids may differ between installations.
+  ids may differ, but **their uuids must not**: central must own the concept
+  dictionary and every site must be seeded from it. Installations seeded
+  separately may carry different uuids (`bin/generate_concept_mapping.rb` had to
+  match concepts by name); their changes would be quarantined as
+  `unknown_reference_data`, which is visible and safe, but stops their data.
+  Syncing reference data from central is the follow-up that guarantees this.
 - **Out-of-scope columns** (`visit_id`, `order_id`, `form_id`, `value_group_id`)
   are kept in central's backup copy but not copied to other nodes.
 - **HMAC signatures instead of mutual TLS**, and a demo API token instead of
@@ -89,10 +94,6 @@ site server with `rake site_sync:benchmark` (stop the agent first).
   page of rows in one statement and resumes after an interruption, but the demo
   has only about 1 000 rows. Time it on a copy of a real site before quoting the
   8-hour target.
-- **Grants.** `site_sync:grants` only adds rights; an app user that already has
-  `ALL PRIVILEGES` must be revoked first.
-- **Parked downstream rows are retried forever.** They need an age or attempt limit,
-  and a place on the dashboard.
 - **Few automated tests.** The demo checks run against live servers. Only the
   HLC and Merkle helpers have specs; central ingest and the site applier need
   them before the pilot.
@@ -124,7 +125,15 @@ site server with `rake site_sync:benchmark` (stop the agent first).
   from central's time.
 - **Restore resumes.** Each page and the restore's progress commit together,
   so after a power cut the restore continues from the last page for the same
-  epoch; a table that fails its checksum is downloaded again from scratch.
+  epoch; a table that fails its checksum is downloaded again from scratch. Once
+  central accepts the restore the site leaves restoring mode at once, and the
+  catch-up pull is an ordinary pull: if it fails, the agent's next pull catches up.
+- **Parked rows give up.** A change from central whose parent never arrives is
+  retried after every pull, but after 100 attempts or 7 days it is marked
+  orphaned and shown on central's dashboard for a data officer.
+- **Grants start from nothing.** `rake site_sync:grants` revokes everything the
+  app and sync accounts hold before granting exactly what each needs, so an app
+  account that had `ALL PRIVILEGES` loses `DELETE` on the sync queue.
 
 ## Where things are
 

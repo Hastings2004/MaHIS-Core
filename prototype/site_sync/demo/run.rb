@@ -284,7 +284,9 @@ scene 'tamper', '8. The queue cannot be edited, and a changed batch is caught' d
   grants = sh("bin/rake 'site_sync:grants[mahis_app,mahis_sync]'", node: :a, quiet: true)
   db(:a).query("CREATE USER IF NOT EXISTS 'mahis_app'@'%' IDENTIFIED BY 'app'")
   db(:a).query("CREATE USER IF NOT EXISTS 'mahis_sync'@'%' IDENTIFIED BY 'sync'")
-  grants.lines.grep(/^GRANT/).each { |sql| db(:a).query(sql.strip.chomp(';')) }
+  # Give the app account ALL first, as many installs do, to show the revoke works.
+  db(:a).query("GRANT ALL PRIVILEGES ON mahis_site_a.* TO 'mahis_app'@'%'")
+  grants.lines.grep(/^(REVOKE|GRANT)/).each { |sql| db(:a).query(sql.strip.chomp(';')) }
   before = value(:a, 'SELECT COUNT(*) FROM sync_change_log').to_i
   out = `mysql --no-defaults -umahis_app -papp -h127.0.0.1 -P3307 mahis_site_a -e "DELETE FROM sync_change_log" 2>&1`
   info out.lines.grep(/ERROR/).first.to_s.strip

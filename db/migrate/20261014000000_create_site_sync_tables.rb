@@ -74,7 +74,9 @@ class CreateSiteSyncTables < ActiveRecord::Migration[7.0]
         event_json JSON NOT NULL,
         attempts INT NOT NULL DEFAULT 0,
         last_error TEXT NULL,
-        created_at DATETIME(6) NOT NULL
+        created_at DATETIME(6) NOT NULL,
+        orphaned_at DATETIME(6) NULL,
+        KEY idx_sync_pending_apply_open (orphaned_at, id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3
     SQL
 

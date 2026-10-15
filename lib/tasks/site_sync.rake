@@ -76,6 +76,10 @@ namespace :site_sync do
       SELECT TABLE_NAME FROM information_schema.TABLES
       WHERE TABLE_SCHEMA = #{connection.quote(db)} AND TABLE_TYPE = 'BASE TABLE'
     SQL
+    # Start from nothing: an app user that already holds ALL PRIVILEGES would
+    # otherwise keep DELETE on the sync queue and the TRIGGER right.
+    puts "REVOKE ALL PRIVILEGES, GRANT OPTION FROM #{app};"
+    puts "REVOKE ALL PRIVILEGES, GRANT OPTION FROM #{agent};"
     statements = tables.flat_map do |table|
       if table.start_with?('sync_')
         # The capture triggers write the log with their definer's rights, so

@@ -75,9 +75,17 @@ module SiteSync
                               { tables: @report['tables'].transform_values { |t| t['checksum_ok'] } })
       raise "Central did not accept the restore: #{complete.body}" unless complete.status == 200
 
-      caught_up = Puller.new(client: @client).run_once
+      # Central now treats the site as active, so leave restoring mode first:
+      # if the catch-up below failed, the site must not be stuck half-open
+      # with no way to rerun the restore (central no longer serves it).
       State.set('restore_progress', '')
       State.set('mode', 'normal')
+      caught_up = begin
+        Puller.new(client: @client).run_once
+      rescue StandardError => e
+        @log.call("  catch-up pull failed (#{e.message}); the agent's next pull will catch up")
+        :deferred
+      end
       @report.merge!('epoch' => manifest['epoch'], 'data_safe_up_to' => manifest['last_received_at'],
                      'catch_up' => caught_up.to_s, 'seconds' => (Time.now - started).round(1))
       @log.call("Restore complete in #{@report['seconds']}s. Changes made after #{manifest['last_received_at']} " \

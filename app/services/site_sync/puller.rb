@@ -51,8 +51,14 @@ module SiteSync
       response.body.slice('patient_uuid', 'event_count')
     end
 
+    # A parked row whose parent never arrives is not retried forever: after
+    # this many attempts or this many days it is marked orphaned, counted in
+    # the heartbeat and shown on central's dashboard for a data officer.
+    MAX_PENDING_ATTEMPTS = 100
+    MAX_PENDING_DAYS = 7
+
     def retry_pending
-      @conn.select_all('SELECT * FROM sync_pending_apply ORDER BY id').to_a.each do |row|
+      @conn.select_all('SELECT * FROM sync_pending_apply WHERE orphaned_at IS NULL ORDER BY id').to_a.each do |row|
         @conn.transaction(requires_new: true) do
           @applier.apply(JSON.parse(row['event_json']))
           @conn.execute("DELETE FROM sync_pending_apply WHERE id = #{row['id']}")
@@ -60,7 +66,10 @@ module SiteSync
         end
       rescue Codec::MissingRef, ActiveRecord::StatementInvalid => e
         @conn.execute(<<~SQL)
-          UPDATE sync_pending_apply SET attempts = attempts + 1, last_error = #{@conn.quote(e.message.slice(0, 500))}
+          UPDATE sync_pending_apply
+          SET attempts = attempts + 1, last_error = #{@conn.quote(e.message.slice(0, 500))},
+              orphaned_at = IF(attempts >= #{MAX_PENDING_ATTEMPTS}
+                               OR created_at < NOW(6) - INTERVAL #{MAX_PENDING_DAYS} DAY, NOW(6), NULL)
           WHERE id = #{row['id']}
         SQL
       end

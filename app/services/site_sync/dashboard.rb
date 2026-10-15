@@ -37,6 +37,7 @@ module SiteSync
         'heartbeat_age_s' => site['last_heartbeat_at'] && (Time.now - site['last_heartbeat_at']).round,
         'backlog' => beat['backlog'] || {}, 'oldest_unsent_s' => beat['oldest_unsent_seconds'],
         'clock_offset_s' => beat['clock_offset_s'], 'mode' => beat['mode'],
+        'parked' => beat['pending_apply'].to_i, 'orphaned' => beat['orphaned'].to_i,
         'triggers' => beat['triggers_installed'] && "#{beat['triggers_installed']}/#{beat['triggers_expected']}",
         'last_batch_at' => @conn.select_value("SELECT MAX(received_at) FROM sync_received_batches WHERE site_code = #{code}"),
         'events_received' => @conn.select_value(
@@ -74,6 +75,7 @@ module SiteSync
             <td>#{s['events_received']}<br><small>last #{esc[s['last_batch_at']&.strftime('%H:%M:%S')]}</small></td>
             <td>#{s['backup_rows']}</td>
             <td class="#{s['open_quarantine'].positive? ? 'warn' : 'ok'}">#{s['open_quarantine']}</td>
+            <td class="#{s['orphaned'].positive? ? 'warn' : 'ok'}">#{s['parked']}<br><small>#{s['orphaned']} orphaned</small></td>
             <td class="#{clock_class}">#{s['clock_offset_s'] || '—'} s</td>
             <td>#{esc[s['triggers']]}</td>
             <td>#{esc[rec_text]}</td>
@@ -113,7 +115,7 @@ module SiteSync
           #{data['logged_conflicts']} auto-resolved · refreshed #{esc[data['generated_at']]}</div>
         <div class="wrap"><table>
           <tr><th>Site</th><th>Status</th><th>Unsent</th><th>Oldest unsent</th><th>Events received</th><th>Backup rows</th>
-              <th>Quarantine</th><th>Clock offset</th><th>Triggers</th><th>Last reconciliation</th><th>Heartbeat</th></tr>
+              <th>Quarantine</th><th>Parked at site</th><th>Clock offset</th><th>Triggers</th><th>Last reconciliation</th><th>Heartbeat</th></tr>
           #{sites}
         </table></div>
         <h2>Quarantine (latest)</h2>

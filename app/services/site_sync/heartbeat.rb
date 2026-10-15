@@ -24,7 +24,8 @@ module SiteSync
         'backlog' => unsent.to_h { |r| [r['lane'], r['events'].to_i] },
         'oldest_unsent_seconds' => oldest ? (Time.now - oldest).round : 0,
         'open_quarantine' => @conn.select_value("SELECT COUNT(*) FROM sync_quarantine_notices WHERE status = 'open'").to_i,
-        'pending_apply' => @conn.select_value('SELECT COUNT(*) FROM sync_pending_apply').to_i,
+        'pending_apply' => @conn.select_value('SELECT COUNT(*) FROM sync_pending_apply WHERE orphaned_at IS NULL').to_i,
+        'orphaned' => @conn.select_value('SELECT COUNT(*) FROM sync_pending_apply WHERE orphaned_at IS NOT NULL').to_i,
         'pull_cursor' => State.get_i('pull_cursor', 0),
         'triggers_installed' => installed_triggers.size,
         'triggers_expected' => TriggerGenerator.expected_trigger_names.size

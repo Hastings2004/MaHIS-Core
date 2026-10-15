@@ -61,6 +61,10 @@ tables:
 # rows. Columns pointing at it travel as the referenced row's uuid and are
 # matched by uuid on the receiving node, because integer ids differ between
 # installations (see db/mahis_pro_to_dev_concept_id_mapping.json).
+# REQUIREMENT: central owns the concept dictionary and every site carries the
+# same uuids. Installations seeded separately may not (bin/generate_concept_mapping.rb
+# had to match them by name); then events are quarantined as
+# unknown_reference_data rather than pointing at the wrong concept.
 # `match: id` remains available for data known to have identical ids everywhere.
 reference_refs:
   creator: { table: users, match: uuid }
