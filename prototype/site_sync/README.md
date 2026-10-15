@@ -45,7 +45,7 @@ below).
 | conflict | Two offline sites edited different fields of one name: both edits survived on all three nodes. A birth date changed at both went to review |
 | quarantine | A visit dated in the future was quarantined with its observations (same request) while other data kept flowing; fixing the date at the site released all three |
 | void | Patient registered and voided while offline: central has it voided, with reason and user |
-| tamper | The app's MySQL account cannot delete queued changes; a batch edited after sealing was refused with an alert; a replayed or altered signed request was refused |
+| tamper | Site A's API runs as the restricted `mahis_app` account and its saves are still captured (triggers run as `mahis_sync`); that account cannot delete queued changes; a batch edited after sealing was refused with an alert; a replayed or altered signed request was refused |
 | clock | Site A's clock jumped a year ahead: its changes were still accepted, capped at central's time with an alert, and later changes flowed normally |
 | reconcile | Two rows corrupted behind the app's back were found by Merkle comparison (8 KB exchanged). The deleted row came back automatically; the changed row was held until a data officer approved the repair |
 | restore | Site B wiped and rebuilt from central: a first attempt was cut off part-way (logins refused meanwhile), the second resumed and finished; exact checksums verified, same local ids, new epoch; the old server stays locked out |
@@ -130,10 +130,23 @@ site server with `rake site_sync:benchmark` (stop the agent first).
   catch-up pull is an ordinary pull: if it fails, the agent's next pull catches up.
 - **Parked rows give up.** A change from central whose parent never arrives is
   retried after every pull, but after 100 attempts or 7 days it is marked
-  orphaned and shown on central's dashboard for a data officer.
-- **Grants start from nothing.** `rake site_sync:grants` revokes everything the
-  app and sync accounts hold before granting exactly what each needs, so an app
-  account that had `ALL PRIVILEGES` loses `DELETE` on the sync queue.
+  orphaned and shown on central's dashboard for a data officer. Once the
+  parent is available (for example released from quarantine),
+  `rake site_sync:retry_orphans` retries them.
+- **Three MySQL accounts per site**, as the demo runs them:
+  - an administrator runs migrations, `site_sync:install` and `site_sync:grants`;
+  - `mahis_app` (the MaHIS API) can read and write clinical tables but only
+    read the sync tables, so it cannot edit or delete the queue;
+  - `mahis_sync` (the agent) owns the capture triggers: a trigger runs with
+    its definer's rights, so the triggers carry `DEFINER = 'mahis_sync'@'%'`
+    (`SITE_SYNC_TRIGGER_DEFINER`) and keep working after the app account is
+    restricted. `site_sync:check` fails if any trigger has another definer.
+
+  `rake site_sync:grants` only touches rights on the MaHIS database (other
+  databases and global rights are left alone, with a warning if a global right
+  would override it), keeps the database-wide rights the app needs (temporary
+  tables, routines, views), and must be rerun after a migration that adds a
+  table.
 
 ## Where things are
 

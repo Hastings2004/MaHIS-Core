@@ -49,7 +49,12 @@ for node in a b; do
     # real endpoints without the password/passkey flow.
     proto_mysql "${DATABASE_URL##*/}" -e "UPDATE users SET authentication_token = 'demo-token',
       token_expiry_time = NOW() + INTERVAL 1 YEAR WHERE username = 'admin'"
+    # As the administrator: triggers (owned by mahis_sync), the rollout
+    # snapshot, then the restricted rights for mahis_app and mahis_sync.
     bin/rake site_sync:install
-    bin/rake site_sync:snapshot )
+    bin/rake site_sync:snapshot
+    bin/rake "site_sync:grants[mahis_app,mahis_sync]" 2>/dev/null | grep -E '^(REVOKE|GRANT|-- WARNING)' \
+      | tee >(grep WARNING >&2 || true) | grep -v '^--' | proto_mysql
+    echo "restricted mahis_app and mahis_sync on $SITE_DB" )
 done
 echo "Setup done. Next: bin/start (servers, link simulator and agents)."

@@ -44,6 +44,21 @@ namespace :site_sync do
       installed = SiteSync::Heartbeat.new(client: nil).installed_triggers
       missing = SiteSync::TriggerGenerator.expected_trigger_names - installed
       problems << "missing capture triggers: #{missing.join(', ')}" if missing.any?
+
+      # Every trigger must run as the sync account, or saves can fail once the
+      # app user's rights are restricted.
+      if (definer = SiteSync::Config.trigger_definer)
+        expected = definer.delete("'`")
+        connection.select_rows(<<~SQL).each do |name, actual|
+          SELECT TRIGGER_NAME, DEFINER FROM information_schema.TRIGGERS
+          WHERE TRIGGER_SCHEMA = #{connection.quote(connection.current_database)}
+            AND TRIGGER_NAME LIKE 'site\\_sync\\_%'
+        SQL
+          problems << "#{name}: runs as #{actual}, expected #{expected}" unless actual == expected
+        end
+      else
+        problems << 'SITE_SYNC_TRIGGER_DEFINER is not set: triggers run as whoever installed them'
+      end
     end
 
     # TRUNCATE and hard deletes bypass or blur the audit trail; synced tables
@@ -66,35 +81,78 @@ namespace :site_sync do
     end
   end
 
-  desc 'Print GRANTs so the app cannot alter the sync queue: rake site_sync:grants[app_user,sync_user]'
+  # Prints SQL for an administrator to run (e.g. `... | mysql -u root mahis`).
+  #
+  # Only rights on THIS database are touched: other databases (healthdata),
+  # global rights and other users are left alone. Because the grants are per
+  # table, run this again after every migration that adds a table, and run
+  # migrations and `site_sync:install` as a separate admin account.
+  desc 'Print SQL restricting the app and sync MySQL accounts: rake site_sync:grants[app_user,sync_user]'
   task :grants, %i[app_user sync_user] => :environment do |_, args|
     connection = ActiveRecord::Base.lease_connection
     db = connection.current_database
-    app = "'#{args[:app_user] || 'mahis_app'}'@'%'"
-    agent = "'#{args[:sync_user] || 'mahis_sync'}'@'%'"
-    tables = connection.select_values(<<~SQL)
-      SELECT TABLE_NAME FROM information_schema.TABLES
-      WHERE TABLE_SCHEMA = #{connection.quote(db)} AND TABLE_TYPE = 'BASE TABLE'
+    app_name = args[:app_user] || 'mahis_app'
+    sync_name = args[:sync_user] || 'mahis_sync'
+    app = "'#{app_name}'@'%'"
+    agent = "'#{sync_name}'@'%'"
+    objects = connection.select_rows(<<~SQL)
+      SELECT TABLE_NAME, TABLE_TYPE FROM information_schema.TABLES
+      WHERE TABLE_SCHEMA = #{connection.quote(db)} ORDER BY TABLE_NAME
     SQL
-    # Start from nothing: an app user that already holds ALL PRIVILEGES would
-    # otherwise keep DELETE on the sync queue and the TRIGGER right.
-    puts "REVOKE ALL PRIVILEGES, GRANT OPTION FROM #{app};"
-    puts "REVOKE ALL PRIVILEGES, GRANT OPTION FROM #{agent};"
-    statements = tables.flat_map do |table|
-      if table.start_with?('sync_')
-        # The capture triggers write the log with their definer's rights, so
-        # the application itself only ever needs to read these tables.
-        ["GRANT SELECT ON `#{db}`.`#{table}` TO #{app};",
-         "GRANT SELECT, INSERT, UPDATE, DELETE ON `#{db}`.`#{table}` TO #{agent};"]
-      elsif SiteSync::Config.synced?(table)
-        ["GRANT SELECT, INSERT, UPDATE, DELETE ON `#{db}`.`#{table}` TO #{app};",
-         "GRANT SELECT, INSERT, UPDATE, DELETE ON `#{db}`.`#{table}` TO #{agent};"]
+
+    # A right granted on *.* cannot be taken away for one table, so warn
+    # loudly if either account has dangerous global rights.
+    [app_name, sync_name].each do |user|
+      global = connection.select_values(<<~SQL)
+        SELECT PRIVILEGE_TYPE FROM information_schema.USER_PRIVILEGES
+        WHERE GRANTEE = #{connection.quote("'#{user}'@'%'")}
+          AND PRIVILEGE_TYPE IN ('INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'TRIGGER', 'SUPER')
+      SQL
+      next if global.empty?
+
+      puts "-- WARNING: '#{user}'@'%' holds #{global.join(', ')} ON *.*; these override the per-table rights below."
+      puts "-- Remove them first: REVOKE #{global.join(', ')} ON *.* FROM '#{user}'@'%';"
+    end
+
+    # Start from nothing on this database only (IF EXISTS: no error for a
+    # right the account never had).
+    [app, agent].each do |user|
+      puts "REVOKE IF EXISTS ALL PRIVILEGES ON `#{db}`.* FROM #{user};"
+      objects.each { |name, _| puts "REVOKE IF EXISTS ALL PRIVILEGES ON `#{db}`.`#{name}` FROM #{user};" }
+    end
+    # Database-wide rights the app needs: reports use temporary tables and
+    # stored routines.
+    puts "GRANT CREATE TEMPORARY TABLES, EXECUTE, LOCK TABLES, SHOW VIEW ON `#{db}`.* TO #{app};"
+
+    objects.each do |name, type|
+      object = "`#{db}`.`#{name}`"
+      if type == 'VIEW'
+        puts "GRANT SELECT ON #{object} TO #{app};"
+        puts "GRANT SELECT ON #{object} TO #{agent};"
+      elsif name.start_with?('sync_')
+        # Capture triggers write the log with the sync account's rights, so
+        # the application only ever reads these tables.
+        puts "GRANT SELECT ON #{object} TO #{app};"
+        puts "GRANT SELECT, INSERT, UPDATE, DELETE ON #{object} TO #{agent};"
+      elsif SiteSync::Config.synced?(name)
+        puts "GRANT SELECT, INSERT, UPDATE, DELETE ON #{object} TO #{app};"
+        # TRIGGER: the triggers on these tables run as the sync account.
+        puts "GRANT SELECT, INSERT, UPDATE, DELETE, TRIGGER ON #{object} TO #{agent};"
       else
-        ["GRANT SELECT, INSERT, UPDATE, DELETE ON `#{db}`.`#{table}` TO #{app};",
-         "GRANT SELECT ON `#{db}`.`#{table}` TO #{agent};"]
+        puts "GRANT SELECT, INSERT, UPDATE, DELETE ON #{object} TO #{app};"
+        puts "GRANT SELECT ON #{object} TO #{agent};"
       end
     end
-    puts statements
+  end
+
+  desc 'Retry changes from central that were given up as orphans (e.g. after their parent was released)'
+  task retry_orphans: :environment do
+    connection = ActiveRecord::Base.lease_connection
+    connection.execute('UPDATE sync_pending_apply SET orphaned_at = NULL, attempts = 0 WHERE orphaned_at IS NOT NULL')
+    puller = SiteSync::Puller.new(client: nil)
+    puller.retry_pending
+    left = connection.select_value('SELECT COUNT(*) FROM sync_pending_apply').to_i
+    puts "retried orphans: #{puller.stats[:pending_applied]} applied, #{left} still waiting"
   end
 
   desc 'Rollout: queue every existing row once, so central gets a full copy of this site'

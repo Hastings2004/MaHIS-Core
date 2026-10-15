@@ -27,7 +27,9 @@ start() { # name command...
 what="${1:-all}"
 if [ "$what" = all ] || [ "$what" = servers ]; then
   for node in central a b; do
+    # Site API servers run as the restricted mahis_app account.
     ( source "$BIN/../env.sh" "$node"
+      [ -n "${SITE_APP_URL:-}" ] && export DATABASE_URL="$SITE_APP_URL"
       start "server_$node" bin/rails server -b 127.0.0.1 -p "$NODE_PORT" -P "$PIDS/rails_$node.pid" )
   done
   for site in A B; do
@@ -44,7 +46,9 @@ if [ "$what" = all ] || [ "$what" = servers ]; then
 fi
 if [ "$what" = all ] || [ "$what" = agents ]; then
   for node in a b; do
-    ( source "$BIN/../env.sh" "$node"; start "agent_$node" bin/rake site_sync:agent )
+    # Agents run as the restricted mahis_sync account.
+    ( source "$BIN/../env.sh" "$node"; export DATABASE_URL="$SITE_SYNC_URL"
+      start "agent_$node" bin/rake site_sync:agent )
   done
 fi
 echo "Dashboard: http://127.0.0.1:3200/api/v1/site_sync/admin/dashboard?token=$SITE_SYNC_ADMIN_TOKEN"

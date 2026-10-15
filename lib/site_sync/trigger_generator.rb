@@ -52,6 +52,15 @@ module SiteSync
       lines.join("\n\n") << "\n"
     end
 
+    # A trigger runs with its definer's rights. Without an explicit definer it
+    # would be whoever ran `rake site_sync:install`; if that is the app's own
+    # MySQL user, which site_sync:grants leaves without INSERT on the log,
+    # every clinical save would fail. So the triggers belong to the sync
+    # account (Config.trigger_definer), which can write the log.
+    def definer_clause
+      Config.trigger_definer ? "DEFINER = #{Config.trigger_definer} " : ''
+    end
+
     def trigger(table, suffix, event, op)
       row = op == 'D' ? 'OLD.' : 'NEW.'
       after = op == 'D' ? 'NULL' : RowSql.json(table, 'NEW.')
@@ -62,7 +71,7 @@ module SiteSync
       skip_unchanged = op == 'U' ? ' AND NOT (v_after <=> v_before)' : ''
 
       <<~SQL.strip
-        CREATE TRIGGER `#{trigger_name(table, suffix)}` AFTER #{event} ON `#{table}` FOR EACH ROW
+        CREATE #{definer_clause}TRIGGER `#{trigger_name(table, suffix)}` AFTER #{event} ON `#{table}` FOR EACH ROW
         BEGIN
           DECLARE v_after JSON DEFAULT NULL;
           DECLARE v_before JSON DEFAULT NULL;

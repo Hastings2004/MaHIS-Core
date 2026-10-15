@@ -23,9 +23,10 @@ case "$1" in
     export MAHIS_SYNC_ROLE=central
     export NODE_PORT=3200
     export SITE_SYNC_CHAOS=1   # allows the demo's simulated power cut
-    unset MAHIS_SITE_CODE SITE_SYNC_CENTRAL_URL SITE_SYNC_SECRET
+    unset MAHIS_SITE_CODE SITE_SYNC_CENTRAL_URL SITE_SYNC_SECRET SITE_DB
     ;;
   a|A)
+    export SITE_DB=mahis_site_a
     export DATABASE_URL="mysql2://proto:proto@127.0.0.1:${PROTO_MYSQL_PORT}/mahis_site_a"
     export MAHIS_SYNC_ROLE=site MAHIS_SITE_CODE=SITEA NODE_PORT=3201
     export SITE_SYNC_CENTRAL_URL="http://127.0.0.1:3211"   # via link simulator
@@ -33,6 +34,7 @@ case "$1" in
     export SITE_SYNC_SECRET="${SITE_SYNC_SECRET_OVERRIDE:-$(cat "$PROTO_TMP/secret_SITEA" 2>/dev/null || echo "$SITEA_SECRET")}"
     ;;
   b|B)
+    export SITE_DB=mahis_site_b
     export DATABASE_URL="mysql2://proto:proto@127.0.0.1:${PROTO_MYSQL_PORT}/mahis_site_b"
     export MAHIS_SYNC_ROLE=site MAHIS_SITE_CODE=SITEB NODE_PORT=3202
     export SITE_SYNC_CENTRAL_URL="http://127.0.0.1:3212"   # via link simulator
@@ -43,6 +45,17 @@ case "$1" in
     return 1 2>/dev/null || exit 1
     ;;
 esac
+
+# On a site, DATABASE_URL is the administrator (setup, install, benchmark).
+# The API server runs as mahis_app and the agent as mahis_sync, like a real
+# site after `rake site_sync:grants`; the capture triggers run as mahis_sync.
+if [ -n "${SITE_DB:-}" ]; then
+  export SITE_APP_URL="mysql2://mahis_app:app@127.0.0.1:${PROTO_MYSQL_PORT}/${SITE_DB}"
+  export SITE_SYNC_URL="mysql2://mahis_sync:sync@127.0.0.1:${PROTO_MYSQL_PORT}/${SITE_DB}"
+  export SITE_SYNC_TRIGGER_DEFINER="'mahis_sync'@'%'"
+else
+  unset SITE_DB SITE_APP_URL SITE_SYNC_URL SITE_SYNC_TRIGGER_DEFINER
+fi
 
 export SITE_SYNC_LOG_LEVEL="${SITE_SYNC_LOG_LEVEL:-info}"
 # Smaller batches keep one site's catch-up from holding central's feed lock

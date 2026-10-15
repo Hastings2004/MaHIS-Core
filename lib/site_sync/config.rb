@@ -150,6 +150,13 @@ module SiteSync
       ENV.fetch('SITE_SYNC_ADMIN_TOKEN', nil)
     end
 
+    # MySQL account the capture triggers run as, e.g. 'mahis_sync'@'%'. It must
+    # be able to INSERT into sync_change_log and hold TRIGGER on the synced
+    # tables (rake site_sync:grants gives the sync user both).
+    def trigger_definer
+      ENV['SITE_SYNC_TRIGGER_DEFINER'].presence
+    end
+
     # Max events per batch and max raw bytes per batch.
     def batch_max_events
       Integer(ENV.fetch('SITE_SYNC_BATCH_EVENTS', 1000))

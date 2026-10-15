@@ -22,10 +22,16 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 fi
-# The app connects as "proto" (database.yml supplies a password, so the
-# passwordless root cannot be used through DATABASE_URL).
+# Accounts, as a real site would have them:
+#   proto       administrator: setup, migrations, installing triggers, central
+#   mahis_app   the site's MaHIS API (rights set by rake site_sync:grants)
+#   mahis_sync  the site's sync agent; the capture triggers run as this account
+# (database.yml supplies a password, so a passwordless account cannot be used
+# through DATABASE_URL.)
 proto_mysql -e "CREATE USER IF NOT EXISTS 'proto'@'localhost' IDENTIFIED BY 'proto';
                 CREATE USER IF NOT EXISTS 'proto'@'127.0.0.1' IDENTIFIED BY 'proto';
                 GRANT ALL PRIVILEGES ON *.* TO 'proto'@'localhost' WITH GRANT OPTION;
-                GRANT ALL PRIVILEGES ON *.* TO 'proto'@'127.0.0.1' WITH GRANT OPTION;"
+                GRANT ALL PRIVILEGES ON *.* TO 'proto'@'127.0.0.1' WITH GRANT OPTION;
+                CREATE USER IF NOT EXISTS 'mahis_app'@'%' IDENTIFIED BY 'app';
+                CREATE USER IF NOT EXISTS 'mahis_sync'@'%' IDENTIFIED BY 'sync';"
 echo "prototype MySQL ready on $PROTO_MYSQL_PORT"
