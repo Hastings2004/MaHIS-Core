@@ -59,6 +59,9 @@ Rails.application.configure do
   host1 = settings['host1']
 
   config.hosts << "mahisdev.health.gov.mw"
+  # Internal Docker service hostnames used by the site-sync demo stack
+  # (agent-to-central and site-to-site HTTP calls over the compose network).
+  config.hosts.concat(%w[central-api kch-api zch-api])
 
   # Store uploaded files on the local file system (see config/storage.yml for options)
   config.active_storage.service = :local

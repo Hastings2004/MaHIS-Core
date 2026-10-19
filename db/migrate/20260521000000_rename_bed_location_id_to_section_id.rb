@@ -5,7 +5,13 @@ class RenameBedLocationIdToSectionId < ActiveRecord::Migration[8.1]
     remove_bed_location_foreign_key
     remove_bed_location_indexes
 
-    rename_column :bed_mgmt_bed, :location_id, :section_id if column_exists?(:bed_mgmt_bed, :location_id)
+    if column_exists?(:bed_mgmt_bed, :location_id)
+      if column_exists?(:bed_mgmt_bed, :section_id)
+        remove_column :bed_mgmt_bed, :location_id
+      else
+        rename_column :bed_mgmt_bed, :location_id, :section_id
+      end
+    end
 
     add_bed_section_indexes
     add_bed_section_foreign_key

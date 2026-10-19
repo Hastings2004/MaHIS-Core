@@ -54,7 +54,7 @@ module BHTEmrApi
     config.action_cable.disable_request_forgery_protection = true
     # Fallback for environments where config/cable.yml is missing.
     # Without this, ActionCable can raise NoMethodError in pubsub_adapter.
-    config.action_cable.cable ||= if Rails.env.test?
+    config.action_cable.cable ||= if Rails.env.test? || Rails.env.development?
                                     { 'adapter' => 'async' }
                                   else
                                     {

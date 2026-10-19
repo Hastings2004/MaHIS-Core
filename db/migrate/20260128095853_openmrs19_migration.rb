@@ -1,7 +1,9 @@
 class Openmrs19Migration < ActiveRecord::Migration[7.0]
   def change
-    drop_table :stages if table_exists?(:stages)
-    drop_table :visit if table_exists?(:visit)
+    connection.disable_referential_integrity do
+      drop_table :stages if table_exists?(:stages)
+      drop_table :visit if table_exists?(:visit)
+    end
 
     add_column :patient_program, :location_id, :integer unless column_exists?(:patient_program, :location_id)
 
