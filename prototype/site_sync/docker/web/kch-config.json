@@ -1,0 +1,16 @@
+{
+	"production": {
+		"apiURL": "localhost",
+		"apiPort": "4201",
+		"apiProtocol": "http",
+		"websocketProtocol": "ws",
+		"mahisReportURL": "https://mahisreports.health.gov.mw/home?route=mahisdev&"
+	},
+	"development": {
+		"apiURL": "localhost",
+		"apiPort": "4201",
+		"apiProtocol": "http",
+		"websocketProtocol": "ws",
+		"mahisReportURL": "https://mahisreports.health.gov.mw/home?route=mahisdev&"
+	}
+}

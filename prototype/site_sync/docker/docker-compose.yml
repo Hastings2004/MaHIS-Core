@@ -1,0 +1,237 @@
+# MaHIS two-way sync: central and two hospitals, each an independent MaHIS
+# installation (its own database, API, web app and sync agent), as they would
+# be deployed. Run from this folder:
+#
+#   docker compose up -d          start everything (first start: ~10 min)
+#   docker compose ps             what is running
+#   docker compose down           stop (data is kept)
+#   docker compose down -v        stop and delete all data
+#
+# Open:
+#   Central dashboard        http://localhost:4200/api/v1/site_sync/admin/dashboard?token=demo-admin-token
+#   Kamuzu Central (KCH)     http://localhost:8201   (MaHIS web app; API on :4201)
+#   Zomba Central (ZCH)      http://localhost:8202   (MaHIS web app; API on :4202)
+#
+# Each site reaches central only over the "wan" network, so taking a site
+# offline is: docker network disconnect mahis-sync_wan mahis-sync-kch-agent-1
+# (and `connect` to bring it back). See README.md in this folder.
+name: mahis-sync
+
+x-core: &core
+  image: mahis-core-sync:dev
+  restart: unless-stopped
+  environment: &core-env
+    RAILS_ENV: development
+    SITE_SYNC_LOG_LEVEL: info
+    SITE_SYNC_ADMIN_TOKEN: ${SITE_SYNC_ADMIN_TOKEN:-demo-admin-token}
+
+x-db: &db
+  image: ${MYSQL_IMAGE:-mysql:8.0.35}
+  restart: unless-stopped
+  command:
+    - --default-authentication-plugin=mysql_native_password
+    - --character-set-server=utf8mb3
+    - --collation-server=utf8mb3_unicode_ci
+    - --sql-mode=STRICT_TRANS_TABLES
+    - --log-bin-trust-function-creators=1
+    # Small footprint: three of these run on one laptop beside five Rails
+    # processes. A real site server would give MySQL far more.
+    - --innodb-buffer-pool-size=64M
+    - --performance-schema=OFF
+    - --max-connections=40
+  environment:
+    MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+    MYSQL_DATABASE: mahis
+  healthcheck:
+    test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${DB_ROOT_PASSWORD:-root}"]
+    interval: 10s
+    retries: 60
+
+services:
+  # ---------------------------------------------------------------- central
+  central-db:
+    <<: *db
+    volumes:
+      # Accounts, then the MaHIS data every server starts from: a copy of
+      # your dev database made by bin/setup (override with MAHIS_DUMP=...).
+      - ./db-init/00-accounts.sql:/docker-entrypoint-initdb.d/00-accounts.sql:ro
+      - ${MAHIS_DUMP:-../../../tmp/site_sync_mysql/source_dump.sql.gz}:/docker-entrypoint-initdb.d/10-mahis.sql.gz:ro
+      - central-data:/var/lib/mysql
+    networks: [central]
+
+  central-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [central]
+
+  central-init:
+    <<: *core
+    build:   # the one service that builds the shared MaHIS-Core image
+      context: ../../..
+      dockerfile: prototype/site_sync/docker/core.Dockerfile
+    restart: "no"
+    command: ["prototype/site_sync/docker/central-init.sh"]
+    environment:
+      <<: *core-env
+      MAHIS_SYNC_ROLE: central
+      DB_HOST: central-db
+      DB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+      KCH_SECRET: ${KCH_SECRET:-kch-demo-secret-change-me-000000000000000000000000000000000}
+      ZCH_SECRET: ${ZCH_SECRET:-zch-demo-secret-change-me-000000000000000000000000000000000}
+    depends_on: { central-db: { condition: service_healthy } }
+    networks: [central]
+
+  central-api:
+    <<: *core
+    environment:
+      <<: *core-env
+      MAHIS_SYNC_ROLE: central
+      DATABASE_URL: mysql2://root:${DB_ROOT_PASSWORD:-root}@central-db:3306/mahis
+      REDIS_URL: redis://central-redis:6379/1
+      SIDEKIQ_REDIS_URL: redis://central-redis:6379/0
+    depends_on: { central-init: { condition: service_completed_successfully } }
+    ports: ["4200:3000"]
+    networks: [central, wan]
+
+  # ------------------------------------------- Kamuzu Central Hospital (KCH)
+  kch-db:
+    <<: *db
+    volumes:
+      - ./db-init/00-accounts.sql:/docker-entrypoint-initdb.d/00-accounts.sql:ro
+      - ${MAHIS_DUMP:-../../../tmp/site_sync_mysql/source_dump.sql.gz}:/docker-entrypoint-initdb.d/10-mahis.sql.gz:ro
+      - kch-data:/var/lib/mysql
+    networks: [kch]
+
+  kch-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [kch]
+
+  kch-init:
+    <<: *core
+    restart: "no"
+    command: ["prototype/site_sync/docker/site-init.sh"]
+    environment: &kch-env
+      <<: *core-env
+      MAHIS_SYNC_ROLE: site
+      MAHIS_SITE_CODE: KCH
+      MAHIS_SITE_LOCATION_ID: "527"
+      SITE_SYNC_TRIGGER_DEFINER: "'mahis_sync'@'%'"
+      SITE_SYNC_CENTRAL_URL: http://central-api:3000
+      SITE_SYNC_SECRET: ${KCH_SECRET:-kch-demo-secret-change-me-000000000000000000000000000000000}
+      DB_HOST: kch-db
+      DB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+      REDIS_URL: redis://kch-redis:6379/1
+      SIDEKIQ_REDIS_URL: redis://kch-redis:6379/0
+    depends_on: { kch-db: { condition: service_healthy } }
+    networks: [kch]
+
+  kch-api:
+    <<: *core
+    environment:
+      <<: *kch-env
+      DATABASE_URL: mysql2://mahis_app:app@kch-db:3306/mahis
+    depends_on: { kch-init: { condition: service_completed_successfully } }
+    ports: ["4201:3000"]
+    networks: [kch]
+
+  kch-agent:
+    <<: *core
+    command: ["bin/rake", "site_sync:agent"]
+    environment:
+      <<: *kch-env
+      DATABASE_URL: mysql2://mahis_sync:sync@kch-db:3306/mahis
+      SITE_SYNC_PUSH_EVERY: ${SITE_SYNC_PUSH_EVERY:-5}
+      SITE_SYNC_PULL_EVERY: ${SITE_SYNC_PULL_EVERY:-10}
+      SITE_SYNC_HEARTBEAT_EVERY: ${SITE_SYNC_HEARTBEAT_EVERY:-15}
+      SITE_SYNC_MAX_BACKOFF: ${SITE_SYNC_MAX_BACKOFF:-30}
+    depends_on:
+      kch-init: { condition: service_completed_successfully }
+      central-api: { condition: service_started }
+    networks: [kch, wan]
+
+  kch-web:
+    image: nginx:alpine
+    restart: unless-stopped
+    volumes:
+      - ${MAHIS_WEB_DIST:-../../../../MAHIS/dist}:/usr/share/nginx/html:ro
+      - ./web/kch-config.json:/etc/mahis/config.json:ro
+      - ./web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports: ["8201:80"]
+
+  # -------------------------------------------- Zomba Central Hospital (ZCH)
+  zch-db:
+    <<: *db
+    volumes:
+      - ./db-init/00-accounts.sql:/docker-entrypoint-initdb.d/00-accounts.sql:ro
+      - ${MAHIS_DUMP:-../../../tmp/site_sync_mysql/source_dump.sql.gz}:/docker-entrypoint-initdb.d/10-mahis.sql.gz:ro
+      - zch-data:/var/lib/mysql
+    networks: [zch]
+
+  zch-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [zch]
+
+  zch-init:
+    <<: *core
+    restart: "no"
+    command: ["prototype/site_sync/docker/site-init.sh"]
+    environment: &zch-env
+      <<: *core-env
+      MAHIS_SYNC_ROLE: site
+      MAHIS_SITE_CODE: ZCH
+      MAHIS_SITE_LOCATION_ID: "1507"
+      SITE_SYNC_TRIGGER_DEFINER: "'mahis_sync'@'%'"
+      SITE_SYNC_CENTRAL_URL: http://central-api:3000
+      SITE_SYNC_SECRET: ${ZCH_SECRET:-zch-demo-secret-change-me-000000000000000000000000000000000}
+      DB_HOST: zch-db
+      DB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+      REDIS_URL: redis://zch-redis:6379/1
+      SIDEKIQ_REDIS_URL: redis://zch-redis:6379/0
+    depends_on: { zch-db: { condition: service_healthy } }
+    networks: [zch]
+
+  zch-api:
+    <<: *core
+    environment:
+      <<: *zch-env
+      DATABASE_URL: mysql2://mahis_app:app@zch-db:3306/mahis
+    depends_on: { zch-init: { condition: service_completed_successfully } }
+    ports: ["4202:3000"]
+    networks: [zch]
+
+  zch-agent:
+    <<: *core
+    command: ["bin/rake", "site_sync:agent"]
+    environment:
+      <<: *zch-env
+      DATABASE_URL: mysql2://mahis_sync:sync@zch-db:3306/mahis
+      SITE_SYNC_PUSH_EVERY: ${SITE_SYNC_PUSH_EVERY:-5}
+      SITE_SYNC_PULL_EVERY: ${SITE_SYNC_PULL_EVERY:-10}
+      SITE_SYNC_HEARTBEAT_EVERY: ${SITE_SYNC_HEARTBEAT_EVERY:-15}
+      SITE_SYNC_MAX_BACKOFF: ${SITE_SYNC_MAX_BACKOFF:-30}
+    depends_on:
+      zch-init: { condition: service_completed_successfully }
+      central-api: { condition: service_started }
+    networks: [zch, wan]
+
+  zch-web:
+    image: nginx:alpine
+    restart: unless-stopped
+    volumes:
+      - ${MAHIS_WEB_DIST:-../../../../MAHIS/dist}:/usr/share/nginx/html:ro
+      - ./web/zch-config.json:/etc/mahis/config.json:ro
+      - ./web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports: ["8202:80"]
+
+networks:
+  central: {}
+  kch: {}
+  zch: {}
+  wan: {}   # the "internet" between hospitals and central
+
+volumes:
+  central-data: {}
+  kch-data: {}
+  zch-data: {}

@@ -37,17 +37,17 @@ ensure
 end
 
 # ---------------------------------------------------------------------------
-scene 'live', '1. Live sync: a patient registered at Site A reaches central' do
-  step 'Register a patient at Site A (POST /api/v1/people, POST /api/v1/patients)'
+scene 'live', '1. Live sync: a patient registered at KCH reaches central' do
+  step 'Register a patient at KCH (POST /api/v1/people, POST /api/v1/patients)'
   patient = register_patient(:a, given: 'Thoko', family: "Phiri#{unique_letters}")
-  info "Site A person_id #{patient[:person_id]}, uuid #{patient[:uuid]}"
+  info "KCH person_id #{patient[:person_id]}, uuid #{patient[:uuid]}"
 
   step 'Record a weight (POST /api/v1/encounters with one observation)'
   visit = record_weight(:a, patient[:person_id], 61.5)
   seconds = wait_for('patient and visit at central') do
     at_central?('person', patient[:uuid]) && at_central?('encounter', visit[:uuid])
   end
-  measure 'lag Site A -> central (demo push interval 2 s)', "#{seconds} s"
+  measure 'lag KCH -> central (demo push interval 2 s)', "#{seconds} s"
 
   check('patient is at central') { at_central?('person', patient[:uuid]) }
   check('visit and weight are at central') do
@@ -55,7 +55,7 @@ scene 'live', '1. Live sync: a patient registered at Site A reaches central' do
                      WHERE e.uuid = '#{visit[:uuid]}'").to_f == 61.5
   end
   info "central gave the patient its own id #{person_id(:central, patient[:uuid])} " \
-       "(Site A: #{patient[:person_id]}); they are matched by uuid"
+       "(KCH: #{patient[:person_id]}); they are matched by uuid"
 
   step 'Which rows did that one API call create? (endpoint tracking)'
   _, body, = api(:a, :get, "/api/v1/site_sync/requests/#{visit[:request_id]}")
@@ -70,14 +70,14 @@ scene 'live', '1. Live sync: a patient registered at Site A reaches central' do
 end
 
 # ---------------------------------------------------------------------------
-scene 'offline', '2. Site A offline: work continues, the queue drains in order' do
-  step 'Cut Site A off from central'
+scene 'offline', '2. KCH offline: work continues, the queue drains in order' do
+  step 'Cut KCH off from central'
   link('A', 'cut')
   patients = %w[Chikondi Mphatso Tiyamike].map { |given| register_patient(:a, given:, family: "Kumwenda#{unique_letters}") }
-  info "registered #{patients.size} patients while offline; Site A has #{unsent(:a)} changes waiting"
+  info "registered #{patients.size} patients while offline; KCH has #{unsent(:a)} changes waiting"
   sleep 5
   check('nothing reached central while offline') { patients.none? { |p| at_central?('person', p[:uuid]) } }
-  check('changes are kept safely in the Site A queue') { unsent(:a).positive? }
+  check('changes are kept safely in the KCH queue') { unsent(:a).positive? }
 
   step 'Restore the link'
   link('A', 'restore')
@@ -89,7 +89,7 @@ scene 'offline', '2. Site A offline: work continues, the queue drains in order' 
       SELECT l.lane, l.committed_seq, COUNT(b.seq) AS received, COUNT(DISTINCT b.seq) AS distinct_seq
       FROM sync_site_lanes l JOIN sync_received_batches b
         ON b.site_code = l.site_code AND b.epoch = l.epoch AND b.lane = l.lane
-      WHERE l.site_code = 'SITEA' GROUP BY l.lane, l.committed_seq
+      WHERE l.site_code = 'KCH' GROUP BY l.lane, l.committed_seq
     SQL
   end
 end
@@ -100,28 +100,28 @@ scene 'power_cut', '3. Power cut at central in the middle of a batch' do
     step 'Arm the fault: central will die after applying the next batch, before COMMIT'
     File.write(File.join(ROOT, 'tmp/site_sync_crash_next_batch'), '1')
     patient = register_patient(:a, given: 'Power', family: 'Cut')
-    lanes_before = rows(:central, "SELECT lane, committed_seq FROM sync_site_lanes WHERE site_code = 'SITEA' ORDER BY lane")
+    lanes_before = rows(:central, "SELECT lane, committed_seq FROM sync_site_lanes WHERE site_code = 'KCH' ORDER BY lane")
     sh('DATABASE_URL=$SITE_SYNC_URL bin/rake site_sync:push', node: :a)
     check('nothing from the crashed batch is at central') do
       !at_central?('person', patient[:uuid]) &&
         value(:central, "SELECT COUNT(*) FROM sync_site_mirror WHERE row_uuid = '#{patient[:uuid]}'").to_i.zero?
     end
     check('central did not move its sequence numbers') do
-      rows(:central, "SELECT lane, committed_seq FROM sync_site_lanes WHERE site_code = 'SITEA' ORDER BY lane") == lanes_before
+      rows(:central, "SELECT lane, committed_seq FROM sync_site_lanes WHERE site_code = 'KCH' ORDER BY lane") == lanes_before
     end
-    check('Site A still holds the batch as unacknowledged') { unsent(:a).positive? }
+    check('KCH still holds the batch as unacknowledged') { unsent(:a).positive? }
 
-    step 'Central is back: Site A simply sends the same batch again'
+    step 'Central is back: KCH simply sends the same batch again'
     sh('DATABASE_URL=$SITE_SYNC_URL bin/rake site_sync:push', node: :a)
     check('the patient is at central exactly once') do
       value(:central, "SELECT COUNT(*) FROM person WHERE uuid = '#{patient[:uuid]}'").to_i == 1
     end
-    check('Site A queue is empty') { unsent(:a).zero? }
+    check('KCH queue is empty') { unsent(:a).zero? }
   end
 end
 
 # ---------------------------------------------------------------------------
-scene 'lost_ack', '4. Acknowledgement lost: central committed, Site A never heard back' do
+scene 'lost_ack', '4. Acknowledgement lost: central committed, KCH never heard back' do
   with_agent_stopped('a') do
     step 'Make the link drop central\'s answers'
     link('A', 'drop-acks')
@@ -129,9 +129,9 @@ scene 'lost_ack', '4. Acknowledgement lost: central committed, Site A never hear
     sh('DATABASE_URL=$SITE_SYNC_URL bin/rake site_sync:push', node: :a)
     batch = rows(:a, "SELECT id, lane, seq, status FROM sync_batches ORDER BY id DESC LIMIT 1").first
     check('central committed the batch') { at_central?('person', patient[:uuid]) }
-    check("Site A still thinks batch #{batch['lane']}##{batch['seq']} is unsent") { batch['status'] == 'sealed' }
+    check("KCH still thinks batch #{batch['lane']}##{batch['seq']} is unsent") { batch['status'] == 'sealed' }
 
-    step 'Restore the link; Site A resends the same batch'
+    step 'Restore the link; KCH resends the same batch'
     link('A', 'restore')
     sh('DATABASE_URL=$SITE_SYNC_URL bin/rake site_sync:push', node: :a)
     ack = JSON.parse(value(:a, "SELECT ack_json FROM sync_batches WHERE id = #{batch['id']}") || '{}')
@@ -140,7 +140,7 @@ scene 'lost_ack', '4. Acknowledgement lost: central committed, Site A never hear
       value(:central, "SELECT COUNT(*) FROM person WHERE uuid = '#{patient[:uuid]}'").to_i == 1
     end
     check('the batch was applied once') do
-      value(:central, "SELECT COUNT(*) FROM sync_received_batches WHERE site_code = 'SITEA' AND lane = '#{batch['lane']}'
+      value(:central, "SELECT COUNT(*) FROM sync_received_batches WHERE site_code = 'KCH' AND lane = '#{batch['lane']}'
                        AND seq = #{batch['seq']}").to_i == 1
     end
   end
@@ -148,13 +148,13 @@ end
 
 # ---------------------------------------------------------------------------
 scene 'conflict', '5. Two sites edit the same patient while both are offline' do
-  step 'Register a patient at Site A; Site B fetches them for a referral'
+  step 'Register a patient at KCH; ZCH fetches them for a referral'
   patient = register_patient(:a, given: 'Grace', family: 'Mvula', birthdate: '1988-08-08')
   wait_for('patient at central') { at_central?('person', patient[:uuid]) }
   sh("DATABASE_URL=$SITE_SYNC_URL bin/rake 'site_sync:hydrate[#{patient[:uuid]},referral]'", node: :b)
   b_id = person_id(:b, patient[:uuid])
-  check('Site B has the patient (under its own local id)') { !b_id.nil? }
-  info "Site A id #{patient[:person_id]}, Site B id #{b_id}"
+  check('ZCH has the patient (under its own local id)') { !b_id.nil? }
+  info "KCH id #{patient[:person_id]}, ZCH id #{b_id}"
 
   step 'Cut both sites off; each edits a different field of the same name, and both change the birth date'
   link('A', 'cut')
@@ -194,7 +194,7 @@ scene 'quarantine', '6. A bad record is quarantined; the rest keeps flowing' do
   request_id = "demo-#{SecureRandom.hex(4)}"
   encounter_uuid = SecureRandom.uuid
 
-  step 'Site A saves a visit dated 3 days in the future, with two observations, in one request'
+  step 'KCH saves a visit dated 3 days in the future, with two observations, in one request'
   db(:a).query('START TRANSACTION')
   db(:a).query("SET @sync_request_id = '#{request_id}', @sync_endpoint = 'POST /api/v1/encounters (demo)'")
   db(:a).query(<<~SQL)
@@ -230,14 +230,14 @@ scene 'quarantine', '6. A bad record is quarantined; the rest keeps flowing' do
     value(:central, "SELECT COUNT(*) FROM sync_quarantine WHERE row_uuid IN ('#{obs_uuids.join("','")}') AND status = 'open'").to_i == 2
   end
   wait_for('other patient at central') { at_central?('person', other[:uuid]) }
-  check('other data from Site A still reached central') { at_central?('person', other[:uuid]) }
-  check('central keeps the quarantined rows in its backup copy of Site A') do
+  check('other data from KCH still reached central') { at_central?('person', other[:uuid]) }
+  check('central keeps the quarantined rows in its backup copy of KCH') do
     value(:central, "SELECT COUNT(*) FROM sync_site_mirror WHERE row_uuid = '#{encounter_uuid}'").to_i == 1
   end
   _, status, = api(:a, :get, '/api/v1/site_sync/status')
-  check('Site A can see its own quarantine list') { status['quarantine'].any? { |q| q['row_uuid'] == encounter_uuid } }
+  check('KCH can see its own quarantine list') { status['quarantine'].any? { |q| q['row_uuid'] == encounter_uuid } }
 
-  step 'The clinician corrects the date at Site A'
+  step 'The clinician corrects the date at KCH'
   db(:a).query("UPDATE encounter SET encounter_datetime = NOW() WHERE uuid = '#{encounter_uuid}'")
   wait_for('visit and both observations applied') do
     at_central?('encounter', encounter_uuid) && obs_uuids.all? { |u| at_central?('obs', u) }
@@ -256,8 +256,8 @@ scene 'void', '7. A patient registered and voided while offline' do
   step 'Offline: register a patient, then void the registration (DELETE /api/v1/patients/:id)'
   patient = register_patient(:a, given: 'Duplicate', family: 'Entry')
   status, = api(:a, :delete, "/api/v1/patients/#{patient[:person_id]}?reason=Registered%20twice%20by%20mistake")
-  check('the void was accepted at Site A') { [200, 204].include?(status) }
-  info "Site A has #{unsent(:a)} changes queued (the registration and the void)"
+  check('the void was accepted at KCH') { [200, 204].include?(status) }
+  info "KCH has #{unsent(:a)} changes queued (the registration and the void)"
   link('A', 'restore')
   wait_for('void at central', timeout: 90) do
     value(:central, "SELECT p.voided FROM patient p JOIN person v ON v.person_id = p.patient_id
@@ -280,8 +280,8 @@ end
 
 # ---------------------------------------------------------------------------
 scene 'tamper', '8. The queue cannot be edited, and a changed batch is caught' do
-  step 'Site A runs as restricted MySQL accounts (rake site_sync:grants), as a real site would'
-  check('Site A\'s API is connected as mahis_app') do
+  step 'KCH runs as restricted MySQL accounts (rake site_sync:grants), as a real site would'
+  check('KCH\'s API is connected as mahis_app') do
     value(:a, "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER = 'mahis_app' AND DB = 'mahis_site_a'")
       .to_i.positive?
   end
@@ -315,7 +315,7 @@ scene 'tamper', '8. The queue cannot be edited, and a changed batch is caught' d
     sh('DATABASE_URL=$SITE_SYNC_URL bin/rake site_sync:push', node: :a)
     check('central refused the altered batch') { !at_central?('person', patient[:uuid]) }
     check('central raised a tamper alert') do
-      value(:central, "SELECT COUNT(*) FROM sync_alerts WHERE site_code = 'SITEA' AND kind = 'batch_tampered'").to_i.positive?
+      value(:central, "SELECT COUNT(*) FROM sync_alerts WHERE site_code = 'KCH' AND kind = 'batch_tampered'").to_i.positive?
     end
     step 'Put the original batch back; it goes through'
     db(:a).query("UPDATE sync_batches SET payload = '#{db(:a).escape(batch['payload'])}' WHERE id = #{batch['id']}")
@@ -323,12 +323,12 @@ scene 'tamper', '8. The queue cannot be edited, and a changed batch is caught' d
     check('the genuine batch was accepted') { at_central?('person', patient[:uuid]) }
   end
 
-  step 'Someone captures a signed request from Site A and sends it again, or changes its parameters'
+  step 'Someone captures a signed request from KCH and sends it again, or changes its parameters'
   secret = sh('echo $SITE_SYNC_SECRET', node: :a, quiet: true).strip
   nonce = SecureRandom.hex(16)
-  first, = signed_get('SITEA', secret, '/api/v1/site_sync/changes?cursor=0&limit=1', nonce:)
-  replay, body = signed_get('SITEA', secret, '/api/v1/site_sync/changes?cursor=0&limit=1', nonce:)
-  altered, = signed_get('SITEA', secret, '/api/v1/site_sync/changes?cursor=0&limit=2000',
+  first, = signed_get('KCH', secret, '/api/v1/site_sync/changes?cursor=0&limit=1', nonce:)
+  replay, body = signed_get('KCH', secret, '/api/v1/site_sync/changes?cursor=0&limit=1', nonce:)
+  altered, = signed_get('KCH', secret, '/api/v1/site_sync/changes?cursor=0&limit=2000',
                         nonce: SecureRandom.hex(16), sign_path: '/api/v1/site_sync/changes?cursor=0&limit=1')
   check('the original request is accepted') { first == 200 }
   check('the same request sent again is refused as a replay') { replay == 401 && body['error'] == 'replayed' }
@@ -339,7 +339,7 @@ end
 scene 'clock', '8b. A site server\'s clock is a year ahead' do
   patient = SHARED[:patient_a] || register_patient(:a, given: 'Clock', family: "Skew#{unique_letters}")
   new_family = "Mtambo#{unique_letters}"
-  step 'Site A\'s clock jumps a year ahead while a clinician edits a name'
+  step 'KCH\'s clock jumps a year ahead while a clinician edits a name'
   db(:a).query('SET TIMESTAMP = UNIX_TIMESTAMP() + 31536000')
   db(:a).query("UPDATE person_name SET family_name = '#{new_family}' WHERE person_id = #{patient[:person_id]} AND voided = 0")
   db(:a).query('SET TIMESTAMP = DEFAULT')
@@ -350,30 +350,30 @@ scene 'clock', '8b. A site server\'s clock is a year ahead' do
   wait_for('edit at central') { name_at_central.call == new_family }
   check('central still accepts the site\'s changes (the site is not blocked)') { name_at_central.call == new_family }
   check('central raised a clock alert') do
-    value(:central, "SELECT COUNT(*) FROM sync_alerts WHERE site_code = 'SITEA' AND kind = 'clock_ahead'").to_i.positive?
+    value(:central, "SELECT COUNT(*) FROM sync_alerts WHERE site_code = 'KCH' AND kind = 'clock_ahead'").to_i.positive?
   end
   limit = ((Time.now.to_r + 3600) * 1_000_000).to_i
   check('the year-ahead time did not enter central\'s records') do
-    value(:central, "SELECT MAX(hlc) FROM sync_site_mirror WHERE site_code = 'SITEA'").to_i < limit
+    value(:central, "SELECT MAX(hlc) FROM sync_site_mirror WHERE site_code = 'KCH'").to_i < limit
   end
-  check('Site A\'s clock state was pulled back to central\'s time') do
+  check('KCH\'s clock state was pulled back to central\'s time') do
     value(:a, "SELECT value FROM sync_state WHERE name = 'hlc'").to_i < limit
   end
-  step 'The next ordinary change from Site A flows normally'
+  step 'The next ordinary change from KCH flows normally'
   later = register_patient(:a, given: 'After', family: "Clockfix#{unique_letters}")
   wait_for('next change at central') { at_central?('person', later[:uuid]) }
   check('later changes sync normally') { at_central?('person', later[:uuid]) }
 end
 
 # ---------------------------------------------------------------------------
-scene 'reconcile', '9. Silent corruption at Site B is found and repaired' do
+scene 'reconcile', '9. Silent corruption at ZCH is found and repaired' do
   name_row = rows(:b, "SELECT n.person_name_id, n.uuid, n.family_name FROM person_name n
                        WHERE n.voided = 0 ORDER BY n.person_name_id LIMIT 1").first
   obs_row = rows(:b, "SELECT o.obs_id, o.uuid FROM obs o WHERE NOT EXISTS (SELECT 1 FROM obs c WHERE c.obs_group_id = o.obs_id)
                       ORDER BY o.obs_id LIMIT 1").first
   queued = unsent(:b)
 
-  step "Corrupt Site B behind the application's back (no capture): change a name, delete an observation"
+  step "Corrupt ZCH behind the application's back (no capture): change a name, delete an observation"
   db(:b).query('SET @sync_capture_paused = 1')
   db(:b).query("UPDATE person_name SET family_name = 'CORRUPTED' WHERE person_name_id = #{name_row['person_name_id']}")
   db(:b).query("DELETE FROM obs WHERE obs_id = #{obs_row['obs_id']}")
@@ -400,7 +400,7 @@ scene 'reconcile', '9. Silent corruption at Site B is found and repaired' do
       value(:b, "SELECT family_name FROM person_name WHERE person_name_id = #{name_row['person_name_id']}") == 'CORRUPTED'
   end
   check('central raised a review alert') do
-    value(:central, "SELECT COUNT(*) FROM sync_alerts WHERE site_code = 'SITEB' AND kind = 'reconciliation_review'").to_i.positive?
+    value(:central, "SELECT COUNT(*) FROM sync_alerts WHERE site_code = 'ZCH' AND kind = 'reconciliation_review'").to_i.positive?
   end
 
   step 'The data officer confirms central\'s copy of that row is right (REPAIR_CENTRAL=<uuid>)'
@@ -413,16 +413,16 @@ scene 'reconcile', '9. Silent corruption at Site B is found and repaired' do
 end
 
 # ---------------------------------------------------------------------------
-scene 'restore', '10. Site B\'s server is lost and rebuilt from central' do
+scene 'restore', '10. ZCH\'s server is lost and rebuilt from central' do
   tables = %w[person patient person_name patient_identifier encounter obs]
   sample = rows(:b, 'SELECT uuid, person_id FROM person ORDER BY person_id').to_h { |r| [r['uuid'], r['person_id']] }
   obs_ids = rows(:b, 'SELECT uuid, obs_id FROM obs').to_h { |r| [r['uuid'], r['obs_id']] }
-  wait_for('Site B queue empty') { unsent(:b).zero? }
+  wait_for('ZCH queue empty') { unsent(:b).zero? }
   sh("#{PROTO}/bin/stop agent_b", quiet: true)
   old_secret = sh('echo $SITE_SYNC_SECRET', node: :b, quiet: true).strip
 
-  step 'Administrator freezes Site B at central: new epoch, old server\'s secret revoked'
-  frozen = admin(:post, '/api/v1/site_sync/admin/sites/SITEB/freeze')
+  step 'Administrator freezes ZCH at central: new epoch, old server\'s secret revoked'
+  frozen = admin(:post, '/api/v1/site_sync/admin/sites/ZCH/freeze')
   info "epoch #{frozen['epoch']}, restore point #{frozen['restore_point_gseq']}"
 
   step 'The old server is still running somewhere and tries to send'
@@ -430,7 +430,7 @@ scene 'restore', '10. Site B\'s server is lost and rebuilt from central' do
   out = sh('DATABASE_URL=$SITE_SYNC_URL bin/rake site_sync:push', node: :b, quiet: true)
   check('central refuses the old server') { out.include?('push: idle') && out.include?('failures') }
   check('central raised an alert about it') do
-    value(:central, "SELECT COUNT(*) FROM sync_alerts WHERE site_code = 'SITEB' AND kind = 'bad_signature'").to_i.positive?
+    value(:central, "SELECT COUNT(*) FROM sync_alerts WHERE site_code = 'ZCH' AND kind = 'bad_signature'").to_i.positive?
   end
 
   step 'Disaster: the server is replaced; the new one has only the MaHIS install (reference data)'
@@ -440,10 +440,10 @@ scene 'restore', '10. Site B\'s server is lost and rebuilt from central' do
     db(:b).query("DELETE FROM #{t}")
   end
   db(:b).query('SET @sync_capture_paused = NULL, FOREIGN_KEY_CHECKS = 1')
-  info "Site B now has #{value(:b, 'SELECT COUNT(*) FROM person')} people"
+  info "ZCH now has #{value(:b, 'SELECT COUNT(*) FROM person')} people"
 
   step 'Restore onto the new server; the power fails part-way through'
-  File.write(File.join(ROOT, 'tmp/site_sync_mysql/secret_SITEB'), frozen['secret'])
+  File.write(File.join(ROOT, 'tmp/site_sync_mysql/secret_ZCH'), frozen['secret'])
   interrupted = begin
     sh('SITE_SYNC_RESTORE_CHUNK=100 SITE_SYNC_CHAOS_RESTORE_PAGES=4 DATABASE_URL=$SITE_SYNC_URL bin/rake site_sync:restore', node: :b, quiet: true)
     false
@@ -473,21 +473,21 @@ scene 'restore', '10. Site B\'s server is lost and rebuilt from central' do
   check('every observation has the same local id as before') do
     obs_ids.all? { |uuid, id| value(:b, "SELECT obs_id FROM obs WHERE uuid = '#{uuid}'") == id }
   end
-  check('central shows Site B active in the new epoch') do
-    rows(:central, "SELECT status, epoch FROM sync_sites WHERE site_code = 'SITEB'").first.values_at('status', 'epoch') ==
+  check('central shows ZCH active in the new epoch') do
+    rows(:central, "SELECT status, epoch FROM sync_sites WHERE site_code = 'ZCH'").first.values_at('status', 'epoch') ==
       ['active', frozen['epoch']]
   end
   check('the record typed on the old server after the freeze is not there (re-enter from paper)') do
     value(:b, "SELECT COUNT(*) FROM person_name WHERE given_name = 'Old' AND family_name = 'Server'").to_i.zero?
   end
 
-  step 'Site B goes live again'
+  step 'ZCH goes live again'
   sleep 6 # let the API notice the restore has finished (restoring flag cached for 5 s)
   check('the API accepts requests again') { api(:b, :get, '/api/v1/site_sync/status').first == 200 }
   sh("#{PROTO}/bin/start agents", quiet: true)
   fresh = register_patient(:b, given: 'Back', family: 'Online')
   wait_for('new patient at central') { at_central?('person', fresh[:uuid]) }
-  check('new work at Site B reaches central in the new epoch') { at_central?('person', fresh[:uuid]) }
+  check('new work at ZCH reaches central in the new epoch') { at_central?('person', fresh[:uuid]) }
   out = sh("SITE_SYNC_SECRET=#{old_secret} DATABASE_URL=$SITE_SYNC_URL bin/rake site_sync:heartbeat", node: :b, quiet: true)
   check('the old server stays locked out') { out.include?('unauthenticated') }
 end

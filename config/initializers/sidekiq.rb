@@ -10,7 +10,7 @@ Sidekiq.default_job_options = {
 }
 
 Sidekiq.configure_server do |config|
-  config.redis = { url: 'redis://localhost:6379/0' }
+  config.redis = { url: ENV.fetch('SIDEKIQ_REDIS_URL', 'redis://localhost:6379/0') }
 
   config.on(:startup) do
     next if ENV.fetch('COUCHDB_NIGHTLY_COMPACTION_ENABLED', 'true') == 'false'
@@ -31,7 +31,7 @@ Sidekiq.configure_server do |config|
 end
 
 Sidekiq.configure_client do |config|
-  config.redis = { url: 'redis://localhost:6379/0' }
+  config.redis = { url: ENV.fetch('SIDEKIQ_REDIS_URL', 'redis://localhost:6379/0') }
 
   config.client_middleware do |chain|
     chain.add SidekiqUniqueJobs::Middleware::Client

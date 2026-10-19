@@ -28,8 +28,18 @@ module SiteSync
         'orphaned' => @conn.select_value('SELECT COUNT(*) FROM sync_pending_apply WHERE orphaned_at IS NOT NULL').to_i,
         'pull_cursor' => State.get_i('pull_cursor', 0),
         'triggers_installed' => installed_triggers.size,
-        'triggers_expected' => TriggerGenerator.expected_trigger_names.size
+        'triggers_expected' => TriggerGenerator.expected_trigger_names.size,
+        'facility' => facility
       }
+    end
+
+    # The facility this site serves, from MaHIS's own location table, so
+    # central shows the real name instead of a code.
+    def facility
+      id = Config.site_location_id
+      return nil unless id
+
+      @conn.select_one("SELECT location_id, name, uuid FROM location WHERE location_id = #{@conn.quote(id)}")
     end
 
     def installed_triggers

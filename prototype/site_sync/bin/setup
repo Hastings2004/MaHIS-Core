@@ -39,9 +39,9 @@ done
 
 ( source "$BIN/../env.sh" central
   bin/rails runner '
-    SiteSync::Central.register_site("SITEA", name: "Site A (demo)", secret: ENV["SITEA_SECRET"])
-    SiteSync::Central.register_site("SITEB", name: "Site B (demo)", secret: ENV["SITEB_SECRET"])
-    puts "registered SITEA and SITEB"' )
+    SiteSync::Central.register_site("KCH", name: "Kamuzu Central Hospital", secret: ENV["KCH_SECRET"])
+    SiteSync::Central.register_site("ZCH", name: "Zomba Central Hospital", secret: ENV["ZCH_SECRET"])
+    puts "registered KCH and ZCH"' )
 
 for node in a b; do
   ( source "$BIN/../env.sh" "$node"
@@ -49,6 +49,13 @@ for node in a b; do
     # real endpoints without the password/passkey flow.
     proto_mysql "${DATABASE_URL##*/}" -e "UPDATE users SET authentication_token = 'demo-token',
       token_expiry_time = NOW() + INTERVAL 1 YEAR WHERE username = 'admin'"
+    # Make this copy a real facility: MaHIS's own setting, and its users
+    # working there (all three databases started as one copy of the dev data).
+    proto_mysql "$SITE_DB" -e "
+      DELETE FROM global_property WHERE property = 'current_health_center_id';
+      INSERT INTO global_property (property, property_value, uuid)
+      VALUES ('current_health_center_id', '$MAHIS_SITE_LOCATION_ID', UUID());
+      UPDATE users SET location_id = $MAHIS_SITE_LOCATION_ID;"
     # As the administrator: triggers (owned by mahis_sync), the rollout
     # snapshot, then the restricted rights for mahis_app and mahis_sync.
     bin/rake site_sync:install

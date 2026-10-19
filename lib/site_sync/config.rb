@@ -142,6 +142,16 @@ module SiteSync
       ENV.fetch('SITE_SYNC_CENTRAL_URL') { raise 'SITE_SYNC_CENTRAL_URL is not set' }
     end
 
+    # The facility this site serves (a MaHIS location id): MAHIS_SITE_LOCATION_ID,
+    # else MaHIS's own current_health_center_id setting. Its name is what
+    # central shows for the site.
+    def site_location_id
+      ENV['MAHIS_SITE_LOCATION_ID'].presence ||
+        ActiveRecord::Base.connection.select_value(
+          "SELECT property_value FROM global_property WHERE property = 'current_health_center_id' LIMIT 1"
+        ).presence
+    end
+
     def secret
       ENV.fetch('SITE_SYNC_SECRET') { raise 'SITE_SYNC_SECRET is not set' }
     end

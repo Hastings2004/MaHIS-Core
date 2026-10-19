@@ -45,14 +45,14 @@ below).
 | conflict | Two offline sites edited different fields of one name: both edits survived on all three nodes. A birth date changed at both went to review |
 | quarantine | A visit dated in the future was quarantined with its observations (same request) while other data kept flowing; fixing the date at the site released all three |
 | void | Patient registered and voided while offline: central has it voided, with reason and user |
-| tamper | Site A's API runs as the restricted `mahis_app` account and its saves are still captured (triggers run as `mahis_sync`); that account cannot delete queued changes; a batch edited after sealing was refused with an alert; a replayed or altered signed request was refused |
-| clock | Site A's clock jumped a year ahead: its changes were still accepted, capped at central's time with an alert, and later changes flowed normally |
+| tamper | KCH's API runs as the restricted `mahis_app` account and its saves are still captured (triggers run as `mahis_sync`); that account cannot delete queued changes; a batch edited after sealing was refused with an alert; a replayed or altered signed request was refused |
+| clock | KCH's clock jumped a year ahead: its changes were still accepted, capped at central's time with an alert, and later changes flowed normally |
 | reconcile | Two rows corrupted behind the app's back were found by Merkle comparison (8 KB exchanged). The deleted row came back automatically; the changed row was held until a data officer approved the repair |
-| restore | Site B wiped and rebuilt from central: a first attempt was cut off part-way (logins refused meanwhile), the second resumed and finished; exact checksums verified, same local ids, new epoch; the old server stays locked out |
+| restore | ZCH wiped and rebuilt from central: a first attempt was cut off part-way (logins refused meanwhile), the second resumed and finished; exact checksums verified, same local ids, new epoch; the old server stays locked out |
 
 | Measurement | Value |
 |---|---|
-| Site A → central lag (demo push interval 2 s) | 0.6 s |
+| KCH → central lag (demo push interval 2 s) | 0.6 s |
 | Bytes per change, gzip (as sent) | 137 B (1 512 B uncompressed; foreign keys travel as uuids) |
 | Changes per minute a 256 kbit/s link carries at the 50% cap | ~7 000 |
 | Rollout snapshot, 2 sites × ~1 000 rows | 35 s |

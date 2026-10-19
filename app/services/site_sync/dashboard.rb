@@ -68,7 +68,7 @@ module SiteSync
         clock_class = s['clock_offset_s'].to_f.abs > 300 ? 'warn' : 'ok'
         <<~ROW
           <tr>
-            <td><b>#{esc[s['site_code']]}</b><br><small>#{esc[s['name']]}</small></td>
+            <td><b>#{esc[s['name']]}</b><br><small>#{esc[s['site_code']]}</small></td>
             <td class="#{status_class}">#{esc[s['status']]}<br><small>epoch #{s['epoch']}</small></td>
             <td>#{esc[backlog]}</td>
             <td class="#{lag_class}">#{s['oldest_unsent_s'] || '—'} s</td>

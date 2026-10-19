@@ -14,8 +14,8 @@ export PATH="$HOME/.rbenv/shims:$HOME/.rbenv/bin:$PATH"
 export RAILS_ENV=development
 export SITE_SYNC_ADMIN_TOKEN=demo-admin-token
 # Demo secrets; real sites get theirs from rake site_sync:register_site.
-export SITEA_SECRET=site-a-demo-secret-0000000000000000000000000000000000000000
-export SITEB_SECRET=site-b-demo-secret-0000000000000000000000000000000000000000
+export KCH_SECRET=site-a-demo-secret-0000000000000000000000000000000000000000
+export ZCH_SECRET=site-b-demo-secret-0000000000000000000000000000000000000000
 
 case "$1" in
   central)
@@ -23,22 +23,24 @@ case "$1" in
     export MAHIS_SYNC_ROLE=central
     export NODE_PORT=3200
     export SITE_SYNC_CHAOS=1   # allows the demo's simulated power cut
-    unset MAHIS_SITE_CODE SITE_SYNC_CENTRAL_URL SITE_SYNC_SECRET SITE_DB
+    unset MAHIS_SITE_CODE SITE_SYNC_CENTRAL_URL SITE_SYNC_SECRET SITE_DB MAHIS_SITE_LOCATION_ID
     ;;
   a|A)
     export SITE_DB=mahis_site_a
     export DATABASE_URL="mysql2://proto:proto@127.0.0.1:${PROTO_MYSQL_PORT}/mahis_site_a"
-    export MAHIS_SYNC_ROLE=site MAHIS_SITE_CODE=SITEA NODE_PORT=3201
+    export MAHIS_SYNC_ROLE=site MAHIS_SITE_CODE=KCH NODE_PORT=3201
+    export MAHIS_SITE_LOCATION_ID=527    # Kamuzu Central Hospital
     export SITE_SYNC_CENTRAL_URL="http://127.0.0.1:3211"   # via link simulator
     # After a restore the site has a new secret, kept in tmp/.
-    export SITE_SYNC_SECRET="${SITE_SYNC_SECRET_OVERRIDE:-$(cat "$PROTO_TMP/secret_SITEA" 2>/dev/null || echo "$SITEA_SECRET")}"
+    export SITE_SYNC_SECRET="${SITE_SYNC_SECRET_OVERRIDE:-$(cat "$PROTO_TMP/secret_KCH" 2>/dev/null || echo "$KCH_SECRET")}"
     ;;
   b|B)
     export SITE_DB=mahis_site_b
     export DATABASE_URL="mysql2://proto:proto@127.0.0.1:${PROTO_MYSQL_PORT}/mahis_site_b"
-    export MAHIS_SYNC_ROLE=site MAHIS_SITE_CODE=SITEB NODE_PORT=3202
+    export MAHIS_SYNC_ROLE=site MAHIS_SITE_CODE=ZCH NODE_PORT=3202
+    export MAHIS_SITE_LOCATION_ID=1507   # Zomba Central Hospital
     export SITE_SYNC_CENTRAL_URL="http://127.0.0.1:3212"   # via link simulator
-    export SITE_SYNC_SECRET="${SITE_SYNC_SECRET_OVERRIDE:-$(cat "$PROTO_TMP/secret_SITEB" 2>/dev/null || echo "$SITEB_SECRET")}"
+    export SITE_SYNC_SECRET="${SITE_SYNC_SECRET_OVERRIDE:-$(cat "$PROTO_TMP/secret_ZCH" 2>/dev/null || echo "$ZCH_SECRET")}"
     ;;
   *)
     echo "usage: source env.sh central|a|b" >&2
