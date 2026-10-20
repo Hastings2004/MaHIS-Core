@@ -20,6 +20,8 @@ bin/rails runner '
   require Rails.root.join("db/migrate/20261014000000_create_site_sync_tables.rb").to_s
   CreateSiteSyncTables.new.migrate(:up)
   ActiveRecord::Base.lease_connection.execute("INSERT IGNORE INTO schema_migrations (version) VALUES (\"20261014000000\")")
-  SiteSync::Central.register_site("KCH", name: "Kamuzu Central Hospital", secret: ENV.fetch("KCH_SECRET"))
-  SiteSync::Central.register_site("ZCH", name: "Zomba Central Hospital", secret: ENV.fetch("ZCH_SECRET"))'
+  SiteSync::Central.register_site("KCH", name: "Kamuzu Central Hospital", secret: ENV.fetch("KCH_SECRET"),
+                                   location_id: ENV.fetch("KCH_LOCATION_ID"))
+  SiteSync::Central.register_site("ZCH", name: "Zomba Central Hospital", secret: ENV.fetch("ZCH_SECRET"),
+                                   location_id: ENV.fetch("ZCH_LOCATION_ID"))'
 echo "[central] ready"

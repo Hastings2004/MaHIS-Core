@@ -62,6 +62,14 @@ module SiteSync
 
       http = Net::HTTP.new(@base.host, @base.port)
       http.use_ssl = @base.scheme == 'https'
+      if http.use_ssl? && Config.mtls_enabled?
+        http.cert = OpenSSL::X509::Certificate.new(File.read(Config.tls_cert_path))
+        http.key = OpenSSL::PKey::RSA.new(File.read(Config.tls_key_path))
+        if Config.tls_ca_path
+          http.ca_file = Config.tls_ca_path
+          http.verify_mode = OpenSSL::SSL::VERIFY_PEER
+        end
+      end
       http.open_timeout = 10
       http.read_timeout = @timeout
       res = http.request(req)

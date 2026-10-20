@@ -20,12 +20,19 @@ module SiteSync
       connection.select_one("SELECT * FROM sync_sites WHERE site_code = #{q(code)}")
     end
 
-    def register_site(code, name:, secret:)
+    def register_site(code, name:, secret:, location_id: nil)
       connection.execute(<<~SQL)
-        INSERT INTO sync_sites (site_code, name, secret, status, epoch, created_at, updated_at)
-        VALUES (#{q(code)}, #{q(name)}, #{q(secret)}, 'active', 1, NOW(6), NOW(6))
-        ON DUPLICATE KEY UPDATE name = VALUES(name), secret = VALUES(secret), updated_at = NOW(6)
+        INSERT INTO sync_sites (site_code, name, location_id, secret, status, epoch, created_at, updated_at)
+        VALUES (#{q(code)}, #{q(name)}, #{q(location_id)}, #{q(SecretCipher.encrypt(secret))}, 'active', 1, NOW(6), NOW(6))
+        ON DUPLICATE KEY UPDATE name = VALUES(name), location_id = VALUES(location_id),
+                                secret = VALUES(secret), updated_at = NOW(6)
       SQL
+    end
+
+    # The raw secret for a site row from `site`/`site_code` (its `secret`
+    # column is encrypted at rest; see SecretCipher).
+    def secret_for(site_row)
+      SecretCipher.decrypt(site_row['secret'])
     end
 
     def alert(site_code, kind, message)

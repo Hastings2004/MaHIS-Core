@@ -47,11 +47,22 @@ module Api
 
         def authenticate_site
           @site = ::SiteSync::Central.site(request.headers['X-Site-Code'].to_s)
+
+          if ::SiteSync::Config.mtls_required?
+            verified_cn = request.headers['X-Site-Code-Verified'].to_s
+            if verified_cn.blank? || verified_cn != request.headers['X-Site-Code'].to_s
+              ::SiteSync::Central.alert(site_code, 'mtls_mismatch',
+                                        "TLS client cert CN (#{verified_cn.presence || 'none'}) does not match the " \
+                                        "claimed site (#{request.headers['X-Site-Code']})") if @site
+              return render json: { status: 'refused', error: 'mtls_required' }, status: :unauthorized
+            end
+          end
+
           timestamp = request.headers['X-Site-Timestamp'].to_s
           nonce = request.headers['X-Site-Nonce'].to_s
           expected = @site && nonce.present? &&
-                     ::SiteSync::Client.signature(@site['secret'], request.method, request.fullpath, timestamp, nonce,
-                                                  request.raw_post)
+                     ::SiteSync::Client.signature(::SiteSync::Central.secret_for(@site), request.method, request.fullpath,
+                                                  timestamp, nonce, request.raw_post)
           given = request.headers['X-Site-Signature'].to_s
           unless expected && ActiveSupport::SecurityUtils.secure_compare(expected, given)
             if @site

@@ -11,11 +11,12 @@ module Api
           central_us = ::SiteSync::Hlc.now_us
           offset_s = ((payload['site_time_us'].to_i - central_us) / 1_000_000.0).round(1)
           beat = payload.merge('clock_offset_s' => offset_s)
-          # The site names its own facility (from its MaHIS location table).
-          facility_name = payload.dig('facility', 'name').presence
+          # The site's display name comes from its registered location_id
+          # (set once, by a central admin, at registration -- see Dashboard),
+          # not from what the site itself reports here: a site should not be
+          # able to rename itself on the central dashboard.
           connection.execute(<<~SQL)
             UPDATE sync_sites SET last_heartbeat_at = NOW(6), heartbeat_json = #{q(beat.to_json)}, updated_at = NOW(6)
-                                  #{facility_name ? ", name = #{q(facility_name)}" : ''}
             WHERE site_code = #{q(site_code)}
           SQL
           if offset_s.abs > MAX_CLOCK_OFFSET_S

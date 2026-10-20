@@ -64,6 +64,33 @@ Containers view (the `mahis-sync` group).
 The scripted fault scenes (power cut, tampering, corruption, restore) stay in
 `prototype/site_sync/demo` and run against the non-Docker setup.
 
+## Mutual TLS (not on by default)
+
+Sync requests are already authenticated with an HMAC signature from the
+site's secret (`Client.signature`), which is enough to run safely today.
+Mutual TLS adds a second, transport-level layer -- not wired into this
+`docker-compose.yml` by default, since it changes the network topology
+between the agents and central and this demo stack is otherwise working.
+To turn it on:
+
+1. Generate a CA and one client certificate per site:
+   ```bash
+   bin/rails runner -e development "nil" # ensure the app loads once first
+   rake site_sync:tls:ca
+   rake site_sync:tls:issue[KCH]
+   rake site_sync:tls:issue[ZCH]
+   ```
+2. Put `nginx-mtls/central.conf` in front of `central-api` (a new compose
+   service on the `central` and `wan` networks, with `ca.crt` + a server
+   cert/key mounted at `/etc/nginx/tls/`), and remove `central-api` from the
+   `wan` network so sites can only reach it through that proxy.
+3. Point each site's `SITE_SYNC_CENTRAL_URL` at `https://central-tls:8443`
+   instead of `http://central-api:3000`, and set `SITE_SYNC_TLS_CERT`,
+   `SITE_SYNC_TLS_KEY` (that site's issued cert/key) and `SITE_SYNC_TLS_CA`
+   (`ca.crt`) on its `*-agent` service.
+4. Set `SITE_SYNC_MTLS_REQUIRED=1` on `central-api` so it refuses any sync
+   request whose verified cert CN doesn't match the claimed site code.
+
 ## Settings
 
 Defaults suit a demo; set them in a `.env` file next to `docker-compose.yml`:
@@ -71,3 +98,24 @@ Defaults suit a demo; set them in a `.env` file next to `docker-compose.yml`:
 `SITE_SYNC_PUSH_EVERY` (default 5 s; production 30), `SITE_SYNC_PULL_EVERY`
 (10 s; production 120), `MAHIS_DUMP` (the starting data),
 `MAHIS_WEB_DIST` (the built web app).
+
+## Not a production template
+
+This layout is for demos and local testing only. Before anything here is
+pointed at a real site or server:
+
+- **Central connects to its database as `root`**, not a restricted account
+  like the sites' `mahis_app`/`mahis_sync`. Give it its own scoped account.
+- **Default passwords and secrets are public in this file**
+  (`DB_ROOT_PASSWORD` defaults to `root`; `mahis_app`/`mahis_sync` passwords
+  are `app`/`sync` from `db-init/00-accounts.sql`; the site secrets are
+  `*-demo-secret-change-me-...`). All of these must be replaced.
+- **Ports are bound to `127.0.0.1` only** so this demo isn't reachable from
+  the rest of the network; a real deployment needs its own access control
+  in front of these services, not just a different bind address.
+- **Rails runs with `RAILS_ENV=development`** and a 64 MB InnoDB buffer pool,
+  sized for three containers sharing one laptop, not a hospital server.
+- **`site-init.sh` runs with `DEMO=1` by default**, which pins every
+  bootstrap user to the site's one facility and gives the demo admin a
+  fixed, long-lived token. Set `DEMO=0` for anything other than this demo;
+  a real site seeds its own users properly instead.

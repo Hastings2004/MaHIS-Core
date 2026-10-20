@@ -156,8 +156,50 @@ module SiteSync
       ENV.fetch('SITE_SYNC_SECRET') { raise 'SITE_SYNC_SECRET is not set' }
     end
 
+    # Mutual TLS client cert (see lib/tasks/site_sync_tls.rake). Optional: the
+    # HMAC signature on every request already authenticates the site, so sync
+    # keeps working with none of these set -- this adds transport-level
+    # defense in depth once nginx is configured to terminate and verify it.
+    def tls_cert_path
+      ENV['SITE_SYNC_TLS_CERT'].presence
+    end
+
+    def tls_key_path
+      ENV['SITE_SYNC_TLS_KEY'].presence
+    end
+
+    def tls_ca_path
+      ENV['SITE_SYNC_TLS_CA'].presence
+    end
+
+    def mtls_enabled?
+      tls_cert_path.present? && tls_key_path.present?
+    end
+
+    # Central only: reject any sync request whose TLS client cert (verified
+    # and forwarded as a header by nginx; see prototype/site_sync/docker/
+    # nginx-mtls/) does not match the claimed site. Off by default so the
+    # HMAC-only prototype setup keeps working with no nginx in front.
+    def mtls_required?
+      ENV['SITE_SYNC_MTLS_REQUIRED'] == '1'
+    end
+
     def admin_token
       ENV.fetch('SITE_SYNC_ADMIN_TOKEN', nil)
+    end
+
+    # The patient_identifier_type name that holds a patient's national ID,
+    # used by DuplicateDetector to match patients across sites.
+    def national_id_identifier_type_name
+      ENV.fetch('SITE_SYNC_NATIONAL_ID_IDENTIFIER_TYPE', 'National ID')
+    end
+
+    # Key for encrypting sync_sites.secret at rest (see SecretCipher).
+    # Falls back to the app's own secret_key_base so this works with no
+    # extra config, but SITE_SYNC_SECRET_ENCRYPTION_KEY should be set
+    # independently in production so rotating one doesn't require the other.
+    def secret_cipher_key
+      ENV['SITE_SYNC_SECRET_ENCRYPTION_KEY'].presence || Rails.application.secret_key_base
     end
 
     # MySQL account the capture triggers run as, e.g. 'mahis_sync'@'%'. It must

@@ -126,7 +126,8 @@ class CreateSiteSyncTables < ActiveRecord::Migration[7.0]
       CREATE TABLE sync_sites (
         site_code VARCHAR(16) NOT NULL PRIMARY KEY,
         name VARCHAR(128) NOT NULL,
-        secret VARCHAR(128) NOT NULL,
+        location_id INT NULL,
+        secret VARCHAR(255) NOT NULL,
         status VARCHAR(16) NOT NULL DEFAULT 'active',
         epoch INT NOT NULL DEFAULT 1,
         restore_point_gseq BIGINT NULL,
@@ -306,12 +307,46 @@ class CreateSiteSyncTables < ActiveRecord::Migration[7.0]
         KEY idx_sync_alerts_site (site_code, created_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3
     SQL
+
+    # Central decisions (design section 3): a data officer corrects a row
+    # directly at central and it goes out to affected sites as a command, not
+    # as a normal site edit. See CentralCorrection.
+    execute <<~SQL
+      CREATE TABLE sync_central_corrections (
+        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        table_name VARCHAR(64) NOT NULL,
+        row_uuid CHAR(38) NOT NULL,
+        changes_json JSON NOT NULL,
+        previous_json JSON NOT NULL,
+        reason TEXT NULL,
+        created_at DATETIME(6) NOT NULL,
+        KEY idx_sync_central_corrections_row (row_uuid)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3
+    SQL
+
+    # Possible duplicate patients, found when a brand-new person arrives at
+    # central: never merged automatically (see DuplicateDetector), only
+    # flagged for a data officer.
+    execute <<~SQL
+      CREATE TABLE sync_duplicate_candidates (
+        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        new_uuid CHAR(38) NOT NULL,
+        matched_uuid CHAR(38) NOT NULL,
+        match_strength VARCHAR(32) NOT NULL,
+        national_id VARCHAR(64) NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'open',
+        created_at DATETIME(6) NOT NULL,
+        resolved_at DATETIME(6) NULL,
+        KEY idx_sync_duplicate_candidates_new (new_uuid, status),
+        KEY idx_sync_duplicate_candidates_matched (matched_uuid, status)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3
+    SQL
   end
 
   def down
-    %w[sync_alerts sync_request_nonces sync_deleted_records sync_subscriptions sync_central_log sync_quarantine
-       sync_conflicts sync_field_versions sync_row_owners sync_site_mirror sync_received_batches
-       sync_site_lanes sync_sites sync_reconciliation_runs sync_row_versions
+    %w[sync_duplicate_candidates sync_central_corrections sync_alerts sync_request_nonces sync_deleted_records
+       sync_subscriptions sync_central_log sync_quarantine sync_conflicts sync_field_versions sync_row_owners
+       sync_site_mirror sync_received_batches sync_site_lanes sync_sites sync_reconciliation_runs sync_row_versions
        sync_quarantine_notices sync_pending_apply sync_batches sync_change_log sync_state].each do |table|
       execute "DROP TABLE IF EXISTS #{table}"
     end

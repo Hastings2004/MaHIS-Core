@@ -286,19 +286,24 @@ namespace :site_sync do
     puts secret
   end
 
-  desc 'Run the sync loops: push every 30 s, pull every 2 min, heartbeat every 5 min'
+  desc 'Run the sync loops: push every 30 s, pull every 2 min, heartbeat every 5 min, reconcile nightly'
   task agent: :environment do
     push_every = Float(ENV.fetch('SITE_SYNC_PUSH_EVERY', 30))
     pull_every = Float(ENV.fetch('SITE_SYNC_PULL_EVERY', 120))
     beat_every = Float(ENV.fetch('SITE_SYNC_HEARTBEAT_EVERY', 300))
+    reconcile_every = Float(ENV.fetch('SITE_SYNC_RECONCILE_EVERY', 86_400))
     max_backoff = Float(ENV.fetch('SITE_SYNC_MAX_BACKOFF', 900))
     log = ->(msg) { puts "#{Time.now.strftime('%H:%M:%S')} [#{SiteSync::Config.site_code}] #{msg}"; $stdout.flush }
 
     backoff = push_every
     next_push = next_pull = next_beat = Time.now
+    # Staggered, not at the same instant as push/pull/heartbeat, and not at
+    # startup: the first run is a full interval away, same as cron would do.
+    next_reconcile = Time.now + reconcile_every
     stop = false
     %w[INT TERM].each { |signal| trap(signal) { stop = true } }
-    log.call("agent started (push #{push_every}s, pull #{pull_every}s, heartbeat #{beat_every}s)")
+    log.call("agent started (push #{push_every}s, pull #{pull_every}s, heartbeat #{beat_every}s, " \
+              "reconcile #{reconcile_every}s)")
 
     until stop
       now = Time.now
@@ -325,6 +330,12 @@ namespace :site_sync do
         if now >= next_beat
           SiteSync::Heartbeat.new.send_once
           next_beat = now + beat_every
+        end
+        if now >= next_reconcile
+          report = SiteSync::Reconciler.new.run(repair: true)
+          differences = (report['tables'] || {}).values.sum { |t| t['differences'].to_i }
+          log.call("reconciled: #{report['status']}, #{differences} difference(s)")
+          next_reconcile = now + reconcile_every
         end
       rescue StandardError => e
         log.call("error: #{e.class}: #{e.message}")

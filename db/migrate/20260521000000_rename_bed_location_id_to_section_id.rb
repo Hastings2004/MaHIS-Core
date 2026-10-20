@@ -7,6 +7,11 @@ class RenameBedLocationIdToSectionId < ActiveRecord::Migration[8.1]
 
     if column_exists?(:bed_mgmt_bed, :location_id)
       if column_exists?(:bed_mgmt_bed, :section_id)
+        # Both columns already exist (e.g. a skeleton restored from a database
+        # that had this rename applied but kept the old column). Carry over
+        # any value section_id is still missing before dropping location_id,
+        # so a non-empty table never silently loses data.
+        execute 'UPDATE bed_mgmt_bed SET section_id = location_id WHERE section_id IS NULL'
         remove_column :bed_mgmt_bed, :location_id
       else
         rename_column :bed_mgmt_bed, :location_id, :section_id

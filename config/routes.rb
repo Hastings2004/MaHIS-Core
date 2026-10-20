@@ -49,12 +49,16 @@ Rails.application.routes.draw do
         get 'restore/export', to: 'restore#export'
         post 'restore/complete', to: 'restore#complete'
         # central: administration (admin token)
+        get 'admin/locations', to: 'admin#locations'
         post 'admin/sites', to: 'admin#register'
         post 'admin/sites/:code/freeze', to: 'admin#freeze'
         get 'admin/quarantine', to: 'admin#quarantine'
         post 'admin/quarantine/:id/release', to: 'admin#release'
         post 'admin/quarantine/:id/reject', to: 'admin#reject'
         get 'admin/conflicts', to: 'admin#conflicts'
+        get 'admin/duplicates', to: 'admin#duplicates'
+        post 'admin/duplicates/:id/dismiss', to: 'admin#dismiss_duplicate'
+        post 'admin/corrections', to: 'admin#correct'
         get 'admin/dashboard', to: 'admin#dashboard'
         # site: for logged-in users
         get 'requests/:request_id', to: 'local#request_changes'

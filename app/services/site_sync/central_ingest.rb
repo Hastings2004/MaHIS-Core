@@ -209,6 +209,7 @@ module SiteSync
       problems = validate(own)
       quarantined = []
       resolved = []
+      new_person_uuids = []
 
       own.each do |event|
         if (problem = problems[event['event_id']])
@@ -220,6 +221,7 @@ module SiteSync
 
         begin
           @conn.transaction(requires_new: true) { apply(event) }
+          new_person_uuids << event['uuid'] if event['table'] == 'person' && event['op'] == 'I'
           fixed_requests = resolve_quarantine(event['uuid'])
           resolved << event['uuid'] if fixed_requests
           # The record is here now (it arrived late, or the site corrected
@@ -239,6 +241,9 @@ module SiteSync
                            'reason' => problem[:reason], 'details' => problem[:details] }
         end
       end
+      # Checked after the whole batch, so a person's name and identifier
+      # (usually captured in the same request) have already landed.
+      new_person_uuids.each { |uuid| DuplicateDetector.new(@conn).check(uuid) }
       { quarantined:, resolved: resolved.uniq }
     end
 
